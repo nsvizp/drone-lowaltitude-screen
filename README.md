@@ -12,6 +12,12 @@
 | 右栏 | 飞行任务排行榜（今日/本周/本月/本年/累计筛选 × 待派发/派发中/已接单/已结单状态切换，各组织数量与占比）+ 飞行统计分析（ECharts：架次/里程/时长） |
 | 中央地图 | 高德地图实时无人机位置（每秒推进，航向旋转、电量消耗、自动返航）、巡检航线、方舱点位，卫星图/电子地图/暗色主题切换，点击无人机查看详情 |
 | 大屏适配 | 1920×1080 设计稿等比缩放居中，支持 16:9 / 21:9 / 32:9 / 48:9，无拉伸无裁切 |
+| 应急图层 | 模拟物资/应急人员/应急车辆三图层，图层控件独立显隐（默认隐藏），点击查详情 |
+| 洪灾抢险 | 「模拟洪灾」随机灾情 → 红色闪烁报警 → 调配引擎自动改派勘测机 + 方舱起飞投送（灾种匹配物资、休整优先飞手） |
+| 现场追踪 | 勘测机灾点盘旋，实时事件流（水位/受淹面积/被困人数），态势总结卡 |
+| 二次调配 | 增援评估规则引擎（覆盖不足/水位连涨/被困超阈/电量红线）→ 结论卡 + 一键增援 |
+| 实时视频 | 点击无人机 →「观看实时视频」→ 模拟 FPV 小窗（HUD 遥测实时联动，预留 FLV 真流接口） |
+| 实时轨迹 | 航迹尾线渐隐；改派/投送时计划航线动态切换为虚线指向目标 |
 
 ## 快速开始
 
@@ -27,7 +33,7 @@ pnpm dev                     # http://127.0.0.1:5173
 ## 测试与构建
 
 ```bash
-pnpm test        # vitest，32 个用例（mock API / 模拟器 / 大屏适配 / 时钟）
+pnpm test        # vitest，67 个用例（mock API / 模拟器 / 灾情调配 / 态势评估 / 适配 / 时钟）
 pnpm build       # vue-tsc 类型检查 + 生产构建
 ```
 
@@ -38,7 +44,8 @@ src/
   api/          # 5 个 mock 接口（openTotalDataByDept / openAssociatedFlyRecord /
                 # openWorkOrderOverview / openTaskOverview / openNewTotalDataByDay）
                 # 数据源自物料包 mock JSON；接真后端时替换为 fetch 即可，组件无需改动
-  sim/          # 无人机模拟器（纯函数）：大圆距离、航向角、航线插值、机队推进
+  sim/          # 纯函数内核：drone-sim（机队/航迹/改飞/盘旋） disaster（调配引擎）
+                # situation（事件流/总结/增援评估） video（视频源） emergency-data（应急图层）
   composables/  # useScreenScale（等比缩放）/ useClock / useDrones
   views/        # LoginView、ScreenView
   views/screen/ # TopBar、LeftPanel、RightPanel、CenterMap

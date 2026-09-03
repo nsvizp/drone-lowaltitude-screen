@@ -7,12 +7,16 @@ export interface DroneRoute {
   points: LngLat[]
 }
 
-export type DroneStatus = 'flying' | 'hovering' | 'returning'
+export type DroneStatus = 'flying' | 'hovering' | 'returning' | 'docked'
+
+/** 任务类型：巡逻 / 抢险勘测 / 物资投送 */
+export type Mission = 'patrol' | 'survey' | 'delivery'
 
 export interface DroneState {
   id: string
   name: string
   status: DroneStatus
+  mission: Mission
   lng: number
   lat: number
   /** 航向角，度，0=正北，顺时针 */
@@ -23,15 +27,34 @@ export interface DroneState {
   altitude: number
   routeId: string
   routeName: string
-  /** 当前航线进度 0..1 */
+  /** 当前航线进度 0..1（巡逻用） */
   progress: number
   taskName: string
+  /** 航迹（飞过的位置，新点追加在尾部，最多保留 TRACK_MAX 个） */
+  track: LngLat[]
+  /** 计划航线：改派/投送时的剩余途经点；null 表示沿固定巡逻航线 */
+  plannedRoute: LngLat[] | null
+  /** 盘旋中心（勘测到达灾点后绕圈） */
+  orbitCenter: LngLat | null
+  /** 盘旋角度（弧度） */
+  orbitAngle: number
+  /** 归属点（方舱/航线起点），低电量返航目标 */
+  home: LngLat
 }
 
 export interface FleetState {
   drones: DroneState[]
   tickCount: number
 }
+
+/** 航迹最大保留点数（1s tick 下约 10 分钟） */
+export const TRACK_MAX = 200
+/** 到达途经点的判定阈值（米） */
+export const ARRIVAL_THRESHOLD_M = 40
+/** 勘测盘旋半径（米） */
+export const ORBIT_RADIUS_M = 500
+/** 低电量返航阈值 */
+export const LOW_BATTERY_RTB = 15
 
 /** mulberry32 确定性伪随机数发生器，便于测试复现 */
 export function mulberry32(seed: number): () => number {
@@ -69,6 +92,14 @@ export function bearingDegrees(a: LngLat, b: LngLat): number {
   return (Math.atan2(y, x) / rad + 360) % 360
 }
 
+/** 从 from 朝 to 前进 distMeters 米后的新位置（可能越过 to，调用方负责到达判定） */
+export function moveTowards(from: LngLat, to: LngLat, distMeters_: number): LngLat {
+  const total = distanceMeters(from, to)
+  if (total === 0) return [to[0], to[1]]
+  const t = Math.min(1, distMeters_ / total)
+  return [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t]
+}
+
 /** 航线总长（米） */
 export function routeLengthMeters(route: DroneRoute): number {
   let total = 0
@@ -97,7 +128,6 @@ export function pointAlongRoute(
     }
     acc += seg
   }
-  // 不可达（上面循环必然返回），仅为类型完备
   return { position: route.points[0], heading: 0, progress: 0 }
 }
 
@@ -171,6 +201,7 @@ export function createFleet(routes: DroneRoute[], count: number, rng: () => numb
       id: 'drone-' + (i + 1),
       name: 'DJI-M350-' + String(i + 1).padStart(3, '0'),
       status: 'flying',
+      mission: 'patrol',
       lng: position[0],
       lat: position[1],
       heading,
@@ -181,6 +212,11 @@ export function createFleet(routes: DroneRoute[], count: number, rng: () => numb
       routeName: route.name,
       progress,
       taskName: TASK_NAMES[Math.floor(rng() * TASK_NAMES.length)],
+      track: [[position[0], position[1]]],
+      plannedRoute: null,
+      orbitCenter: null,
+      orbitAngle: 0,
+      home: route.points[0],
     })
   }
   return { drones, tickCount: 0 }
@@ -195,52 +231,187 @@ function findRoute(routes: DroneRoute[], id: string): DroneRoute {
 /** 电量每秒消耗 0.004%（演示节奏），回巢充满 */
 const BATTERY_DRAIN_PER_SEC = 0.004
 
+function appendTrack(track: LngLat[], pos: LngLat): LngLat[] {
+  const next = track.length >= TRACK_MAX ? track.slice(track.length - TRACK_MAX + 1) : track.slice()
+  next.push([pos[0], pos[1]])
+  return next
+}
+
+/** 盘旋：绕 orbitCenter 以 ORBIT_RADIUS_M 半径转圈 */
+function orbitStep(drone: DroneState, dtSec: number): DroneState {
+  const center = drone.orbitCenter!
+  const angular = (drone.speed * dtSec) / ORBIT_RADIUS_M
+  const angle = drone.orbitAngle + angular
+  const latRadius = ORBIT_RADIUS_M / 111320
+  const lngRadius = ORBIT_RADIUS_M / (111320 * Math.cos((center[1] * Math.PI) / 180))
+  const lng = center[0] + lngRadius * Math.cos(angle)
+  const lat = center[1] + latRadius * Math.sin(angle)
+  return {
+    ...drone,
+    lng,
+    lat,
+    heading: ((angle * 180) / Math.PI + 90 + 360) % 360,
+    orbitAngle: angle,
+    battery: Math.max(0, Math.round((drone.battery - BATTERY_DRAIN_PER_SEC * dtSec) * 10) / 10),
+    track: appendTrack(drone.track, [lng, lat]),
+  }
+}
+
+/** 途经点跟随：朝 plannedRoute[0] 飞，到达后按任务类型推进 */
+function waypointStep(drone: DroneState, dtSec: number): DroneState {
+  const target = drone.plannedRoute![0]
+  const travel = drone.speed * dtSec
+  const dist = distanceMeters([drone.lng, drone.lat], target)
+  const battery = Math.max(0, Math.round((drone.battery - BATTERY_DRAIN_PER_SEC * dtSec) * 10) / 10)
+
+  if (dist <= Math.max(travel, ARRIVAL_THRESHOLD_M)) {
+    // 到达当前途经点
+    const rest = drone.plannedRoute!.slice(1)
+    if (rest.length === 0) {
+      if (drone.mission === 'survey') {
+        // 到达灾点 → 盘旋勘测
+        return {
+          ...drone, lng: target[0], lat: target[1], battery,
+          status: 'hovering', orbitCenter: target, orbitAngle: 0, plannedRoute: null,
+          track: appendTrack(drone.track, target),
+        }
+      }
+      // 投送/返航完成 → 归舱
+      return {
+        ...drone, lng: target[0], lat: target[1], battery: 100,
+        status: 'docked', plannedRoute: null,
+        track: appendTrack(drone.track, target),
+      }
+    }
+    return {
+      ...drone, lng: target[0], lat: target[1], battery,
+      plannedRoute: rest, track: appendTrack(drone.track, target),
+    }
+  }
+
+  const next = moveTowards([drone.lng, drone.lat], target, travel)
+  return {
+    ...drone,
+    lng: next[0], lat: next[1],
+    heading: bearingDegrees([drone.lng, drone.lat], target),
+    battery,
+    track: appendTrack(drone.track, next),
+  }
+}
+
+/** 巡逻：沿固定航线往返（既有逻辑） */
+function patrolStep(drone: DroneState, routes: DroneRoute[], dtSec: number): DroneState {
+  const route = findRoute(routes, drone.routeId)
+  const total = routeLengthMeters(route)
+  const travel = drone.speed * dtSec
+  const direction = drone.status === 'returning' ? -1 : 1
+  let currentDistance = drone.progress * total + travel * direction
+  let status: DroneStatus = drone.status
+  let battery = drone.battery - BATTERY_DRAIN_PER_SEC * dtSec
+
+  if (currentDistance >= total) {
+    currentDistance = total
+    status = 'returning'
+  } else if (currentDistance <= 0) {
+    currentDistance = 0
+    status = 'flying'
+    battery = 100 // 回巢换电
+  }
+  if (battery < LOW_BATTERY_RTB && status === 'flying') {
+    status = 'returning'
+  }
+
+  const { position, heading } = pointAlongRoute(route, currentDistance)
+  return {
+    ...drone,
+    status,
+    lng: position[0],
+    lat: position[1],
+    heading: status === 'returning' ? (heading + 180) % 360 : heading,
+    battery: Math.max(0, Math.round(battery * 10) / 10),
+    progress: total === 0 ? 0 : currentDistance / total,
+    track: appendTrack(drone.track, position),
+  }
+}
+
 /**
  * 推进机队 dtMs 毫秒。纯函数：返回新状态，不修改入参。
- * 无人机沿航线匀速飞行；到终点后进入 returning（沿原航线反向折返），回到起点后满电重新出发。
+ * - 巡逻机沿固定航线往返，回巢满电
+ * - 改派机沿 plannedRoute 途经点飞行：勘测机到终点盘旋，投送机走完航段归舱
+ * - 盘旋机低电量自动返航回家
  */
 export function advanceFleet(state: FleetState, routes: DroneRoute[], dtMs: number): FleetState {
   const dtSec = dtMs / 1000
   const drones = state.drones.map((drone) => {
-    const route = findRoute(routes, drone.routeId)
-    const total = routeLengthMeters(route)
-    const travel = drone.speed * dtSec
-    const direction = drone.status === 'returning' ? -1 : 1
-    let currentDistance = drone.progress * total + travel * direction
-    let status: DroneStatus = drone.status
-    let battery = drone.battery - BATTERY_DRAIN_PER_SEC * dtSec
+    if (drone.status === 'docked') return drone
 
-    if (currentDistance >= total) {
-      currentDistance = total
-      status = 'returning'
-    } else if (currentDistance <= 0) {
-      currentDistance = 0
-      status = 'flying'
-      battery = 100 // 回巢换电
-    }
-    if (battery < 15 && status === 'flying') {
-      status = 'returning' // 低电量强制返航
+    if (drone.status === 'hovering' && drone.orbitCenter) {
+      const stepped = orbitStep(drone, dtSec)
+      if (stepped.battery < 25) {
+        return { ...stepped, status: 'returning' as DroneStatus, orbitCenter: null, plannedRoute: [stepped.home] }
+      }
+      return stepped
     }
 
-    const { position, heading } = pointAlongRoute(route, currentDistance)
-    return {
-      ...drone,
-      status,
-      lng: position[0],
-      lat: position[1],
-      heading: status === 'returning' ? (heading + 180) % 360 : heading,
-      battery: Math.max(0, Math.round(battery * 10) / 10),
-      progress: total === 0 ? 0 : currentDistance / total,
+    if (drone.plannedRoute && drone.plannedRoute.length > 0) {
+      return waypointStep(drone, dtSec)
     }
+
+    return patrolStep(drone, routes, dtSec)
   })
   return { drones, tickCount: state.tickCount + 1 }
 }
 
-/** 派生统计：飞行中 / 返航中 / 低电量 */
-export function fleetSummary(state: FleetState): { flying: number; returning: number; lowBattery: number } {
+/** 改派一架无人机飞往目标点执行任务（勘测用）。纯函数。 */
+export function divertDrone(state: FleetState, droneId: string, target: LngLat, mission: Mission): FleetState {
   return {
-    flying: state.drones.filter((d) => d.status === 'flying').length,
-    returning: state.drones.filter((d) => d.status === 'returning').length,
-    lowBattery: state.drones.filter((d) => d.battery < 25).length,
+    ...state,
+    drones: state.drones.map((d) =>
+      d.id === droneId
+        ? { ...d, mission, status: 'flying' as DroneStatus, plannedRoute: [target], orbitCenter: null, progress: 0, speed: Math.max(d.speed, 22) }
+        : d,
+    ),
+  }
+}
+
+let deliverySeq = 0
+
+/** 从方舱起飞一架投送机，沿 waypoints（物资点 → 灾点 → 回舱）飞行。纯函数。 */
+export function launchDrone(
+  state: FleetState,
+  opts: { name?: string; home: LngLat; waypoints: LngLat[]; taskName: string; mission?: Mission },
+): FleetState {
+  deliverySeq += 1
+  const drone: DroneState = {
+    id: 'delivery-' + deliverySeq,
+    name: opts.name ?? 'DJI-M350-D' + String(deliverySeq).padStart(2, '0'),
+    status: 'flying',
+    mission: opts.mission ?? 'delivery',
+    lng: opts.home[0],
+    lat: opts.home[1],
+    heading: 0,
+    speed: 12,
+    battery: 100,
+    altitude: 100,
+    routeId: '',
+    routeName: '临时投送航线',
+    progress: 0,
+    taskName: opts.taskName,
+    track: [[opts.home[0], opts.home[1]]],
+    plannedRoute: opts.waypoints.slice(),
+    orbitCenter: null,
+    orbitAngle: 0,
+    home: opts.home,
+  }
+  return { ...state, drones: [...state.drones, drone] }
+}
+
+/** 派生统计：飞行中 / 返航中 / 低电量（不含已归舱） */
+export function fleetSummary(state: FleetState): { flying: number; returning: number; lowBattery: number } {
+  const active = state.drones.filter((d) => d.status !== 'docked')
+  return {
+    flying: active.filter((d) => d.status === 'flying').length,
+    returning: active.filter((d) => d.status === 'returning').length,
+    lowBattery: active.filter((d) => d.battery < 25).length,
   }
 }

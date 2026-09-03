@@ -1,0 +1,165 @@
+import { distanceMeters, type DroneState, type FleetState, type LngLat } from './drone-sim'
+import type { EmergencyPoint } from './emergency-data'
+import type { BBox } from './emergency-data'
+
+export interface FloodEvent {
+  id: string
+  position: LngLat
+  /** 严重等级 1~3 */
+  severity: 1 | 2 | 3
+  createdTick: number
+}
+
+export interface ShelterInfo {
+  id: number
+  name: string
+  position: LngLat
+  /** 舱内备用机数 */
+  spareDrones: number
+}
+
+export interface FlyerInfo {
+  id: number
+  name: string
+  /** 最近任务时间 yyyy-MM-dd HH:mm，越早说明休整越充分 */
+  lastMission: string
+}
+
+/** 洪灾灾种匹配的物资关键词（优先级高于距离） */
+export const FLOOD_SUPPLY_KEYWORDS = ['饮用水', '食品', '救生', '冲锋舟', '帐篷', '被褥']
+
+/** 勘测机最低电量阈值（%） */
+export const SURVEY_MIN_BATTERY = 50
+/** 勘测组编制（架） */
+export const SURVEY_TEAM_SIZE = 2
+/** 投送组编制（架/人） */
+export const DELIVERY_TEAM_SIZE = 2
+/** 投送机载荷巡航速度 m/s */
+export const DELIVERY_SPEED = 12
+/** 装卸货时间（分钟） */
+export const HANDLING_MINUTES = 5
+
+export interface SurveyAssignment {
+  droneId: string
+  droneName: string
+  flyerNote: string
+  distanceKm: number
+  battery: number
+  etaSec: number
+}
+
+export interface DeliveryAssignment {
+  shelterId: number
+  shelterName: string
+  droneCount: number
+  flyers: string[]
+  supplySiteId: string
+  supplySiteName: string
+  supplyDetail: string
+  /** 航段：方舱 → 物资点 → 灾点 → 方舱 */
+  legs: LngLat[]
+  totalKm: number
+  etaMinutes: number
+}
+
+export interface DispatchPlan {
+  flood: FloodEvent
+  survey: SurveyAssignment[]
+  delivery: DeliveryAssignment | null
+  /** 无法调配时的原因（如电量不足） */
+  warnings: string[]
+}
+
+/** 随机生成一处洪灾（落在给定范围内，通常用无人机航线包围盒） */
+export function createFloodEvent(rng: () => number, bbox: BBox, tick: number): FloodEvent {
+  return {
+    id: 'flood-' + tick,
+    position: [
+      bbox.minLng + rng() * (bbox.maxLng - bbox.minLng),
+      bbox.minLat + rng() * (bbox.maxLat - bbox.minLat),
+    ],
+    severity: (1 + Math.floor(rng() * 3)) as 1 | 2 | 3,
+    createdTick: tick,
+  }
+}
+
+/** 洪灾物资点打分：灾种关键词匹配优先，其次按距离 */
+export function pickSupplySite(supplies: EmergencyPoint[], flood: FloodEvent): EmergencyPoint | null {
+  if (supplies.length === 0) return null
+  const matched = supplies.filter((s) => FLOOD_SUPPLY_KEYWORDS.some((k) => s.detail.includes(k)))
+  const pool = matched.length > 0 ? matched : supplies
+  return [...pool].sort(
+    (a, b) => distanceMeters(a.position, flood.position) - distanceMeters(b.position, flood.position),
+  )[0]
+}
+
+/** 挑选休整最充分的 n 名飞手（最近任务时间最早优先），不重复 */
+export function pickRestedFlyers(flyers: FlyerInfo[], n: number): FlyerInfo[] {
+  return [...flyers].sort((a, b) => a.lastMission.localeCompare(b.lastMission)).slice(0, n)
+}
+
+/**
+ * 洪灾调配引擎（纯函数）：
+ * 1. 勘测组：在飞、巡逻中、电量 ≥ 50% 的无人机按距灾点升序取 2 架改飞
+ * 2. 投送组：距灾点最近方舱出新机，物资点按灾种匹配>距离选择，飞手按休整充分度指派
+ */
+export function planFloodDispatch(
+  fleet: FleetState,
+  shelters: ShelterInfo[],
+  flyers: FlyerInfo[],
+  supplies: EmergencyPoint[],
+  flood: FloodEvent,
+): DispatchPlan {
+  const warnings: string[] = []
+
+  // --- 勘测组 ---
+  const candidates = fleet.drones
+    .filter((d: DroneState) => d.status === 'flying' && d.mission === 'patrol' && d.battery >= SURVEY_MIN_BATTERY)
+    .map((d) => ({ d, dist: distanceMeters([d.lng, d.lat], flood.position) }))
+    .sort((a, b) => a.dist - b.dist)
+  const survey: SurveyAssignment[] = candidates.slice(0, SURVEY_TEAM_SIZE).map(({ d, dist }) => ({
+    droneId: d.id,
+    droneName: d.name,
+    flyerNote: '原飞手保持操控',
+    distanceKm: Math.round((dist / 1000) * 100) / 100,
+    battery: d.battery,
+    etaSec: Math.round(dist / d.speed),
+  }))
+  if (survey.length < SURVEY_TEAM_SIZE) {
+    warnings.push('满足电量条件的巡逻机不足 ' + SURVEY_TEAM_SIZE + ' 架，勘测组缺编')
+  }
+
+  // --- 投送组 ---
+  let delivery: DeliveryAssignment | null = null
+  const shelter = [...shelters]
+    .filter((s) => s.spareDrones > 0)
+    .sort((a, b) => distanceMeters(a.position, flood.position) - distanceMeters(b.position, flood.position))[0]
+  if (!shelter) {
+    warnings.push('无机库备用机可用，无法组织投送')
+  } else {
+    const site = pickSupplySite(supplies, flood)
+    if (!site) {
+      warnings.push('无可用物资点')
+    } else {
+      const rested = pickRestedFlyers(flyers, DELIVERY_TEAM_SIZE)
+      const legs: LngLat[] = [shelter.position, site.position, flood.position, shelter.position]
+      let totalM = 0
+      for (let i = 1; i < legs.length; i++) totalM += distanceMeters(legs[i - 1], legs[i])
+      delivery = {
+        shelterId: shelter.id,
+        shelterName: shelter.name,
+        droneCount: Math.min(DELIVERY_TEAM_SIZE, shelter.spareDrones),
+        flyers: rested.map((f) => f.name),
+        supplySiteId: site.id,
+        supplySiteName: site.name,
+        supplyDetail: site.detail,
+        legs,
+        totalKm: Math.round((totalM / 1000) * 100) / 100,
+        etaMinutes: Math.round(totalM / DELIVERY_SPEED / 60) + HANDLING_MINUTES,
+      }
+      if (rested.length < DELIVERY_TEAM_SIZE) warnings.push('可指派飞手不足 ' + DELIVERY_TEAM_SIZE + ' 名')
+    }
+  }
+
+  return { flood, survey, delivery, warnings }
+}

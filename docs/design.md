@@ -257,3 +257,41 @@ pnpm build && pnpm preview   # 生产
 3. **mock 按接口文档签名实现**：`src/api» 是唯一替换点，避免接真后端时改动组件
 4. **高德而非 Cesium**：本期 2D 态势足够，接入成本与合规性最优；3D 需求另行评估
 5. **hash 路由**：静态部署无需服务端 rewrite 规则
+
+---
+
+## 10. 洪灾抢险子系统（v2 新增）
+
+### 10.1 闭环
+
+```
+灾情生成 → 初次调配 → 现场追踪 → 态势总结 → 二次调配评估 → 增援执行
+simulateFlood  planFlood  assessSituation  summarize   evaluateReinforcement
+```
+
+### 10.2 调配引擎（sim/disaster.ts，纯函数）
+
+- **勘测组**：在飞 + 巡逻中 + 电量 ≥ 50% 的无人机按距灾点升序取 2 架改飞（不新起飞，响应最快）
+- **投送组**：距灾点最近且有备用机的方舱出新机；物资点**灾种匹配优先于距离**（洪灾关键词：饮用水/食品/救生/冲锋舟/帐篷/被褥，防化服等不匹配项自动降权）；飞手按最近任务时间升序取 2 名（休整最充分、不重复）
+- 输出含全部证据字段（距离/电量/ETA/航段里程），供调配单面板直接展示
+
+### 10.3 模拟器扩展（sim/drone-sim.ts）
+
+- `DroneState» 新增 `track»（航迹，上限 200 点）、`plannedRoute»（动态航线）、`mission»（patrol/survey/delivery）、`orbitCenter/orbitAngle»（盘旋）、`home»（归巢点）
+- 状态机扩展：`docked»（归舱）与 `hovering»（盘旋）；盘旋低电量自动返航
+- `divertDrone» 改派、`launchDrone» 方舱起飞，均为纯函数
+
+### 10.4 态势与评估（sim/situation.ts，纯函数）
+
+- `assessSituation»：水位演化模型（前期 60% 概率上涨，随观测次数趋稳）、面积/被困估计增长、事件流上限 30 条
+- `evaluateReinforcement» 规则：面积超覆盖 / 水位三连涨 / 被困 > 20 人 / 勘测机电量 < 30%，输出理由 + 增援建议
+
+### 10.5 实时视频（sim/video.ts + VideoFeed.vue）
+
+- `getVideoSource» 是唯一真流接缝：当前返回模拟场景（巡逻=城市网格 / 勘测=水面波纹），接真机时改为 `{ type: 'flv', url }»，渲染层换 flv.js 即可
+- 入口：无人机 InfoWindow 内「观看实时视频」按钮（事件委托），浮动小窗 canvas 渲染，HUD 遥测每秒与模拟器真实状态同步
+
+### 10.6 编排（composables）
+
+- `useDrones» 重构为模块级共享单例（机队状态跨组件共享，惰性启动）
+- `useDisaster» 注册 `onFleetTick» 钩子：每 10 tick 驱动观测、投送归舱登记、逐 tick 刷新总结与评估

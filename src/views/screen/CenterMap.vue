@@ -4,6 +4,10 @@ import AMapLoader from '@amap/amap-jsapi-loader'
 import { useDrones } from '@/composables/useDrones'
 import { mulberry32, SHANGHAI_CENTER, type DroneState } from '@/sim/drone-sim'
 import { createEmergencyData, type EmergencyCategory, type EmergencyPoint } from '@/sim/emergency-data'
+import { useDisaster } from '@/composables/useDisaster'
+import DispatchCard from '@/components/DispatchCard.vue'
+import SituationCard from '@/components/SituationCard.vue'
+import VideoFeed from '@/components/VideoFeed.vue'
 
 declare global {
   interface Window {
@@ -20,6 +24,7 @@ const mapError = ref('')
 const selected = ref<DroneState | null>(null)
 
 const { routes, drones, summary } = useDrones(8)
+const disaster = useDisaster()
 
 /** 方舱固定点位（演示数据） */
 const SHELTERS = [
@@ -48,6 +53,12 @@ const layerVisibility = ref<Record<EmergencyCategory, boolean>>({
 
 const layerMarkers: Record<EmergencyCategory, any[]> = { supplies: [], personnel: [], vehicles: [] }
 
+/** 每架机的航迹尾线与动态计划航线 */
+const trackLines = new Map<string, any>()
+const plannedLines = new Map<string, any>()
+/** 洪灾覆盖物 */
+let floodOverlays: any[] = []
+
 let map: any = null
 let satelliteLayer: any = null
 const droneMarkers = new Map<string, any>()
@@ -57,6 +68,7 @@ const STATUS_COLOR: Record<DroneState['status'], string> = {
   flying: '#00e5ff',
   hovering: '#ffd666',
   returning: '#a66bff',
+  docked: '#3a5578',
 }
 
 function droneMarkerHtml(d: DroneState): string {
@@ -78,6 +90,7 @@ function droneInfoHtml(d: DroneState): string {
     '<div>航线：' + d.routeName + '</div>' +
     '<div>高度：' + d.altitude + ' m　速度：' + d.speed.toFixed(1) + ' m/s</div>' +
     '<div>电量：' + d.battery + '%　状态：' + statusText + '</div>' +
+    '<button class="js-video-btn" data-drone="' + d.id + '" style="margin-top:8px;width:100%;padding:5px 0;background:linear-gradient(90deg,#2f80ed,#56ccf2);border:none;border-radius:4px;color:#fff;font-size:12px;cursor:pointer">📹 观看实时视频</button>' +
     '</div>'
   )
 }
@@ -196,22 +209,7 @@ async function initMap() {
     }
 
     // 无人机初始 marker
-    for (const d of drones.value) {
-      const marker = new AMap.Marker({
-        map,
-        position: [d.lng, d.lat],
-        content: droneMarkerHtml(d),
-        offset: new AMap.Pixel(-40, -20),
-      })
-      marker.on('click', () => {
-        selected.value = d
-        new AMap.InfoWindow({
-          content: droneInfoHtml(d),
-          offset: new AMap.Pixel(0, -24),
-        }).open(map, [d.lng, d.lat])
-      })
-      droneMarkers.set(d.id, marker)
-    }
+    for (const d of drones.value) createDroneMarker(d)
 
     applyTheme(theme.value)
   } catch (e) {
@@ -219,20 +217,103 @@ async function initMap() {
   }
 }
 
-// 实时同步无人机位置
+function createDroneMarker(d: DroneState) {
+  const AMap = window.AMap
+  const marker = new AMap.Marker({
+    map,
+    position: [d.lng, d.lat],
+    content: droneMarkerHtml(d),
+    offset: new AMap.Pixel(-40, -20),
+  })
+  marker.on('click', () => {
+    new AMap.InfoWindow({
+      content: droneInfoHtml(d),
+      offset: new AMap.Pixel(0, -24),
+    }).open(map, [d.lng, d.lat])
+  })
+  droneMarkers.set(d.id, marker)
+  return marker
+}
+
+const PLANNED_COLOR: Record<string, string> = { survey: '#ff6b6b', delivery: '#ffd666' }
+
+// 实时同步无人机位置 + 航迹尾线 + 动态计划航线
 watch(drones, (list) => {
-  if (!map) return
+  if (!map || !window.AMap) return
+  const AMap = window.AMap
   for (const d of list) {
-    const marker = droneMarkers.get(d.id)
-    if (!marker) continue
+    let marker = droneMarkers.get(d.id)
+    if (!marker) marker = createDroneMarker(d) // 投送/增援机动态起飞
+    if (d.status === 'docked') { marker.hide(); continue }
+    marker.show()
     marker.setPosition([d.lng, d.lat])
     marker.setContent(droneMarkerHtml(d))
+
+    // 航迹尾线（实线渐隐）
+    if (d.track.length > 1) {
+      let line = trackLines.get(d.id)
+      if (!line) {
+        line = new AMap.Polyline({
+          map, strokeColor: STATUS_COLOR[d.status], strokeWeight: 2,
+          strokeOpacity: 0.45, lineJoin: 'round', showDir: true,
+        })
+        trackLines.set(d.id, line)
+      }
+      line.setPath(d.track)
+    }
+
+    // 动态计划航线（改派/投送时虚线指向目标）
+    let planned = plannedLines.get(d.id)
+    if (d.mission !== 'patrol' && d.plannedRoute && d.plannedRoute.length > 0) {
+      const path = [[d.lng, d.lat], ...d.plannedRoute]
+      if (!planned) {
+        planned = new AMap.Polyline({
+          map, strokeColor: PLANNED_COLOR[d.mission] ?? '#00e5ff', strokeWeight: 3,
+          strokeOpacity: 0.9, strokeStyle: 'dashed', lineJoin: 'round',
+        })
+        plannedLines.set(d.id, planned)
+      }
+      planned.setPath(path)
+    } else if (planned) {
+      map.remove(planned)
+      plannedLines.delete(d.id)
+    }
   }
 })
 
-onMounted(initMap)
+// 洪灾覆盖物：红色警戒圈 + 脉冲标记 + 视野定位
+watch(disaster.flood, (f) => {
+  if (!map || !window.AMap) return
+  const AMap = window.AMap
+  if (floodOverlays.length) { map.remove(floodOverlays); floodOverlays = [] }
+  if (!f) return
+  const circle = new AMap.Circle({
+    map, center: f.position, radius: 400 * f.severity,
+    strokeColor: '#ff3b3b', strokeWeight: 2, strokeOpacity: 0.8,
+    fillColor: '#ff3b3b', fillOpacity: 0.12,
+  })
+  const pulse = new AMap.Marker({
+    map, position: f.position,
+    content: '<div class="flood-pulse"><span>🌊</span></div>',
+    offset: new AMap.Pixel(-16, -16),
+  })
+  floodOverlays = [circle, pulse]
+  map.panTo(f.position)
+})
+
+// InfoWindow 内「观看实时视频」按钮（事件委托）
+function onVideoBtnClick(e: MouseEvent) {
+  const btn = (e.target as HTMLElement).closest('.js-video-btn') as HTMLElement | null
+  if (btn?.dataset.drone) disaster.openVideo(btn.dataset.drone)
+}
+
+onMounted(() => {
+  initMap()
+  document.addEventListener('click', onVideoBtnClick)
+})
 onBeforeUnmount(() => {
   disposed = true
+  document.removeEventListener('click', onVideoBtnClick)
   droneMarkers.clear()
   layerMarkers.supplies = []
   layerMarkers.personnel = []
@@ -273,7 +354,18 @@ onBeforeUnmount(() => {
         {{ l.icon }} {{ l.label }}
         <span class="center-map__layer-count">{{ emergencyData[l.key].length }}</span>
       </button>
+      <button
+        class="center-map__disaster"
+        :disabled="disaster.active.value"
+        @click="disaster.simulateFlood"
+      >
+        {{ disaster.active.value ? '🔴 抢险进行中…' : '⚠ 模拟洪灾' }}
+      </button>
     </div>
+
+    <DispatchCard />
+    <SituationCard />
+    <VideoFeed />
 
     <div class="center-map__themes">
       <button
@@ -408,6 +500,21 @@ onBeforeUnmount(() => {
     }
   }
 
+  &__disaster {
+    margin-top: 4px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #ffb3b3;
+    background: rgba(255, 59, 59, 0.15);
+    border: 1px solid rgba(255, 59, 59, 0.5);
+    border-radius: 4px;
+    cursor: pointer;
+
+    &:hover:not(:disabled) { background: rgba(255, 59, 59, 0.3); }
+    &:disabled { opacity: 0.7; cursor: default; }
+  }
+
   &__themes {
     position: absolute;
     top: 12px;
@@ -482,6 +589,36 @@ onBeforeUnmount(() => {
   padding: 1px 5px;
   border-radius: 3px;
   white-space: nowrap;
+}
+
+.flood-pulse {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  animation: flood-blink 1s ease-in-out infinite;
+}
+
+.flood-pulse::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid #ff3b3b;
+  animation: flood-ring 1.5s ease-out infinite;
+}
+
+@keyframes flood-ring {
+  0% { transform: scale(0.5); opacity: 1; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+
+@keyframes flood-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 .shelter-marker {
