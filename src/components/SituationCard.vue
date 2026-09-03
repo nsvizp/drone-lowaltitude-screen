@@ -1,7 +1,15 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import { useDisaster } from '@/composables/useDisaster'
+import { useDraggable, useResizable } from '@/composables/useDraggable'
 
 const { situation, summary, evalResult, reinforced, executeReinforcement } = useDisaster()
+
+const rootRef = ref<HTMLElement | null>(null)
+const dragHandleRef = ref<HTMLElement | null>(null)
+const resizeGripRef = ref<HTMLElement | null>(null)
+useDraggable(rootRef, dragHandleRef)
+useResizable(rootRef, resizeGripRef, { minW: 320, minH: 240, maxW: 720, maxH: 640 })
 
 const TREND_TEXT = { rising: '↑ 上涨', stable: '→ 稳定', falling: '↓ 回落' } as const
 const KIND_ICON: Record<string, string> = {
@@ -10,8 +18,8 @@ const KIND_ICON: Record<string, string> = {
 </script>
 
 <template>
-  <div v-if="situation && summary" class="situation-card">
-    <div class="situation-card__title">现场态势 · 实时追踪</div>
+  <div v-if="situation && summary" ref="rootRef" class="situation-card">
+    <div ref="dragHandleRef" class="situation-card__title situation-card__drag">⋮⋮ 现场态势 · 实时追踪</div>
 
     <div class="situation-card__stats">
       <div class="situation-card__stat">
@@ -58,6 +66,7 @@ const KIND_ICON: Record<string, string> = {
         {{ reinforced ? '✓ 增援已执行' : '执行增援' }}
       </button>
     </div>
+    <div ref="resizeGripRef" class="situation-card__resize" title="拖动调整大小" />
   </div>
 </template>
 
@@ -79,6 +88,26 @@ const KIND_ICON: Record<string, string> = {
   font-size: 12px;
 
   &__title { font-size: 14px; font-weight: 700; color: #eaf3ff; margin-bottom: 8px; }
+
+  &__drag {
+    cursor: move;
+    user-select: none;
+    touch-action: none;
+  }
+
+  &__resize {
+    position: absolute;
+    right: 2px;
+    bottom: 2px;
+    width: 14px;
+    height: 14px;
+    cursor: nwse-resize;
+    touch-action: none;
+    background:
+      linear-gradient(135deg, transparent 50%, rgba(0, 229, 255, 0.5) 50%),
+      linear-gradient(135deg, transparent 70%, rgba(0, 229, 255, 0.5) 70%);
+    border-radius: 2px;
+  }
 
   &__stats {
     display: grid;

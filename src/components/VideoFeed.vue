@@ -2,12 +2,29 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useDrones } from '@/composables/useDrones'
 import { useDisaster } from '@/composables/useDisaster'
+import { useDraggable, useResizable } from '@/composables/useDraggable'
 import { formatHudTelemetry, getVideoSource, signalBars } from '@/sim/video'
 
 const { drones } = useDrones()
 const { videoDroneId, closeVideo } = useDisaster()
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
+const rootRef = ref<HTMLElement | null>(null)
+const dragHandleRef = ref<HTMLElement | null>(null)
+const resizeGripRef = ref<HTMLElement | null>(null)
+useDraggable(rootRef, dragHandleRef)
+useResizable(rootRef, resizeGripRef, { minW: 240, minH: 200, maxW: 960, axis: 'x' })
+
+// 画布分辨率跟随面板宽度（16:9），放大不糊
+let resizeObserver: ResizeObserver | null = null
+function syncCanvasSize() {
+  const canvas = canvasRef.value
+  const root = rootRef.value
+  if (!canvas || !root) return
+  const w = Math.max(160, root.clientWidth - 4)
+  canvas.width = w
+  canvas.style.height = Math.round((w * 9) / 16) + 'px'
+}
 const drone = computed(() => drones.value.find((d) => d.id === videoDroneId.value) ?? null)
 const scene = computed(() => {
   const d = drone.value
@@ -120,13 +137,27 @@ function draw() {
 }
 
 onMounted(() => { raf = requestAnimationFrame(draw) })
-onBeforeUnmount(() => cancelAnimationFrame(raf))
+onBeforeUnmount(() => {
+  cancelAnimationFrame(raf)
+  resizeObserver?.disconnect()
+})
+
+// 视频窗是 v-if 后渲染的，rootRef 出现时才挂 ResizeObserver
+watch(rootRef, (el) => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
+  if (el) {
+    resizeObserver = new ResizeObserver(syncCanvasSize)
+    resizeObserver.observe(el)
+    syncCanvasSize()
+  }
+})
 watch(videoDroneId, () => { frame = 0 })
 </script>
 
 <template>
-  <div v-if="drone" class="video-feed">
-    <div class="video-feed__bar">
+  <div v-if="drone" ref="rootRef" class="video-feed">
+    <div ref="dragHandleRef" class="video-feed__bar video-feed__drag">
       <span class="video-feed__title">📹 {{ drone.name }} 实时图传</span>
       <span class="video-feed__signal">信号 {{ '▮'.repeat(signalBars(drone)) }}{{ '▯'.repeat(5 - signalBars(drone)) }}</span>
       <button class="video-feed__close" @click="closeVideo">✕</button>
@@ -135,6 +166,7 @@ watch(videoDroneId, () => { frame = 0 })
     <div class="video-feed__foot">
       {{ scene === 'flood' ? '🌊 洪灾勘测画面（模拟图传）' : '🏙 巡逻画面（模拟图传）' }} · {{ drone.taskName }}
     </div>
+    <div ref="resizeGripRef" class="video-feed__resize" title="拖动调整大小" />
   </div>
 </template>
 
@@ -158,6 +190,26 @@ watch(videoDroneId, () => { frame = 0 })
     padding: 6px 10px;
     background: rgba(0, 229, 255, 0.08);
     border-bottom: 1px solid rgba(0, 229, 255, 0.3);
+  }
+
+  &__drag {
+    cursor: move;
+    user-select: none;
+    touch-action: none;
+  }
+
+  &__resize {
+    position: absolute;
+    right: 2px;
+    bottom: 2px;
+    width: 14px;
+    height: 14px;
+    cursor: nwse-resize;
+    touch-action: none;
+    background:
+      linear-gradient(135deg, transparent 50%, rgba(0, 229, 255, 0.6) 50%),
+      linear-gradient(135deg, transparent 70%, rgba(0, 229, 255, 0.6) 70%);
+    border-radius: 2px;
   }
 
   &__title { font-size: 12px; font-weight: 600; color: var(--accent); flex: 1; }
