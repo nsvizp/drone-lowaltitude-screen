@@ -268,15 +268,15 @@ function waypointStep(drone: DroneState, dtSec: number): DroneState {
     // 到达当前途经点
     const rest = drone.plannedRoute!.slice(1)
     if (rest.length === 0) {
-      if (drone.mission === 'survey') {
-        // 到达灾点 → 盘旋勘测
+      if (drone.mission === 'survey' && drone.status !== 'returning') {
+        // 到达灾点 → 盘旋勘测（返航到家不在此列）
         return {
           ...drone, lng: target[0], lat: target[1], battery,
           status: 'hovering', orbitCenter: target, orbitAngle: 0, plannedRoute: null,
           track: appendTrack(drone.track, target),
         }
       }
-      // 投送/返航完成 → 归舱
+      // 投送完成/返航到家 → 归舱换电
       return {
         ...drone, lng: target[0], lat: target[1], battery: 100,
         status: 'docked', plannedRoute: null,
@@ -343,7 +343,22 @@ function patrolStep(drone: DroneState, routes: DroneRoute[], dtSec: number): Dro
 export function advanceFleet(state: FleetState, routes: DroneRoute[], dtMs: number): FleetState {
   const dtSec = dtMs / 1000
   const drones = state.drones.map((drone) => {
-    if (drone.status === 'docked') return drone
+    if (drone.status === 'docked') {
+      // 勘测机回巢换电完毕 → 回到自己的固定巡逻航线重新上岗（home 即航线起点，无跳变）
+      // 无巡逻航线的增援机（routeId 不在 routes 中）留在舱内待命
+      if (drone.mission === 'survey' && routes.some((r) => r.id === drone.routeId)) {
+        return {
+          ...drone,
+          mission: 'patrol' as Mission,
+          status: 'flying' as DroneStatus,
+          plannedRoute: null,
+          orbitCenter: null,
+          orbitAngle: 0,
+          progress: 0,
+        }
+      }
+      return drone
+    }
 
     if (drone.status === 'hovering' && drone.orbitCenter) {
       const stepped = orbitStep(drone, dtSec)

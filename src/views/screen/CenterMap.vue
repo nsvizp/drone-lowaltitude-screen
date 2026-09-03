@@ -53,6 +53,14 @@ const layerVisibility = ref<Record<EmergencyCategory, boolean>>({
 
 const layerMarkers: Record<EmergencyCategory, any[]> = { supplies: [], personnel: [], vehicles: [] }
 
+/** 巡航航线底图（默认隐藏） */
+const routeLines: any[] = []
+const routeVisible = ref(false)
+function toggleRoutes() {
+  routeVisible.value = !routeVisible.value
+  for (const line of routeLines) line.setMap(routeVisible.value ? map : null)
+}
+
 /** 每架机的航迹尾线与动态计划航线 */
 const trackLines = new Map<string, any>()
 const plannedLines = new Map<string, any>()
@@ -163,12 +171,13 @@ async function initMap() {
       viewMode: '2D',
       mapStyle: 'amap://styles/darkblue',
     })
+    // 调试/验收钩子
+    ;(window as unknown as Record<string, unknown>).__MAP = map
 
-    // 航线
+    // 巡航航线底图：默认隐藏（仿真仍沿航线飞行），图层控件可开启
     const ROUTE_COLORS = ['#00e5ff', '#56ccf2', '#52d273', '#ffd666', '#a66bff', '#ff9a6b']
     routes.value.forEach((route, i) => {
-      new AMap.Polyline({
-        map,
+      const line = new AMap.Polyline({
         path: route.points,
         strokeColor: ROUTE_COLORS[i % ROUTE_COLORS.length],
         strokeWeight: 3,
@@ -176,6 +185,7 @@ async function initMap() {
         strokeStyle: 'dashed',
         lineJoin: 'round',
       })
+      routeLines.push(line)
     })
 
     // 方舱
@@ -352,6 +362,15 @@ onBeforeUnmount(() => {
 
     <div class="center-map__layers">
       <div class="center-map__layers-title">图层</div>
+      <button
+        class="center-map__layer"
+        :class="{ 'center-map__layer--on': routeVisible }"
+        @click="toggleRoutes"
+      >
+        <span class="center-map__layer-check">{{ routeVisible ? '☑' : '☐' }}</span>
+        <span class="center-map__layer-icon">🛣</span>
+        巡航航线
+      </button>
       <button
         v-for="l in EMERGENCY_LAYERS"
         :key="l.key"
