@@ -406,11 +406,11 @@ export function launchDrone(
   return { ...state, drones: [...state.drones, drone] }
 }
 
-/** 派生统计：飞行中 / 返航中 / 低电量（不含已归舱） */
+/** 派生统计：飞行中（含盘旋作业）/ 返航中 / 低电量（不含已归舱），与地图可见 marker 口径一致 */
 export function fleetSummary(state: FleetState): { flying: number; returning: number; lowBattery: number } {
   const active = state.drones.filter((d) => d.status !== 'docked')
   return {
-    flying: active.filter((d) => d.status === 'flying').length,
+    flying: active.filter((d) => d.status === 'flying' || d.status === 'hovering').length,
     returning: active.filter((d) => d.status === 'returning').length,
     lowBattery: active.filter((d) => d.battery < 25).length,
   }

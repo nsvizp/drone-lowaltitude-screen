@@ -244,7 +244,15 @@ watch(drones, (list) => {
   for (const d of list) {
     let marker = droneMarkers.get(d.id)
     if (!marker) marker = createDroneMarker(d) // 投送/增援机动态起飞
-    if (d.status === 'docked') { marker.hide(); continue }
+    if (d.status === 'docked') {
+      marker.hide()
+      // 归舱后移除航迹与计划航线，避免模拟机残留地图
+      const track = trackLines.get(d.id)
+      if (track) { map.remove(track); trackLines.delete(d.id) }
+      const planned0 = plannedLines.get(d.id)
+      if (planned0) { map.remove(planned0); plannedLines.delete(d.id) }
+      continue
+    }
     marker.show()
     marker.setPosition([d.lng, d.lat])
     marker.setContent(droneMarkerHtml(d))
