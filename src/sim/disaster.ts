@@ -1,4 +1,4 @@
-import { distanceMeters, type DroneState, type FleetState, type LngLat } from './drone-sim'
+import { distanceMeters, EMERGENCY_SPEED, type DroneState, type FleetState, type LngLat } from './drone-sim'
 import type { EmergencyPoint } from './emergency-data'
 import type { BBox } from './emergency-data'
 
@@ -93,6 +93,14 @@ export function pickSupplySite(supplies: EmergencyPoint[], flood: FloodEvent): E
   )[0]
 }
 
+/** 按距灾点升序挑选有备用机的方舱（初次调配取 1 个，增援取次近） */
+export function pickShelters(shelters: ShelterInfo[], flood: FloodEvent, n: number): ShelterInfo[] {
+  return [...shelters]
+    .filter((s) => s.spareDrones > 0)
+    .sort((a, b) => distanceMeters(a.position, flood.position) - distanceMeters(b.position, flood.position))
+    .slice(0, n)
+}
+
 /** 挑选休整最充分的 n 名飞手（最近任务时间最早优先），不重复 */
 export function pickRestedFlyers(flyers: FlyerInfo[], n: number): FlyerInfo[] {
   return [...flyers].sort((a, b) => a.lastMission.localeCompare(b.lastMission)).slice(0, n)
@@ -123,7 +131,7 @@ export function planFloodDispatch(
     flyerNote: '原飞手保持操控',
     distanceKm: Math.round((dist / 1000) * 100) / 100,
     battery: d.battery,
-    etaSec: Math.round(dist / d.speed),
+    etaSec: Math.round(dist / EMERGENCY_SPEED), // 改派后提速至应急速度，ETA 按实际口径
   }))
   if (survey.length < SURVEY_TEAM_SIZE) {
     warnings.push('满足电量条件的巡逻机不足 ' + SURVEY_TEAM_SIZE + ' 架，勘测组缺编')
@@ -131,9 +139,7 @@ export function planFloodDispatch(
 
   // --- 投送组 ---
   let delivery: DeliveryAssignment | null = null
-  const shelter = [...shelters]
-    .filter((s) => s.spareDrones > 0)
-    .sort((a, b) => distanceMeters(a.position, flood.position) - distanceMeters(b.position, flood.position))[0]
+  const shelter = pickShelters(shelters, flood, 1)[0]
   if (!shelter) {
     warnings.push('无机库备用机可用，无法组织投送')
   } else {

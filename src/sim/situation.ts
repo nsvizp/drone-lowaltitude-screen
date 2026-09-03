@@ -111,6 +111,24 @@ export function assessSituation(
   }
 }
 
+/**
+ * 侦测投送机越过灾点（剩余航段 2→1：物资点 ✓ → 灾点 ✓ → 返舱途中）。
+ * 纯函数：传入上一轮的航段计数表，返回本轮新完成空投的无人机 id 与新表。
+ */
+export function detectSupplyDrops(
+  fleet: FleetState,
+  prevLegs: Map<string, number>,
+): { droppedIds: string[]; nextLegs: Map<string, number> } {
+  const droppedIds: string[] = []
+  const nextLegs = new Map<string, number>()
+  for (const d of fleet.drones) {
+    const cur = d.mission === 'delivery' && d.plannedRoute ? d.plannedRoute.length : 0
+    if (prevLegs.get(d.id) === 2 && cur === 1) droppedIds.push(d.id)
+    nextLegs.set(d.id, cur)
+  }
+  return { droppedIds, nextLegs }
+}
+
 /** 物资投送完成后登记 */
 export function recordDelivery(state: SituationState, packs: number): SituationState {
   return { ...state, deliveredPacks: state.deliveredPacks + packs }

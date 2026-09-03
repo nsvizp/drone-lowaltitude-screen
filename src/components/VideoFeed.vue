@@ -26,6 +26,13 @@ function syncCanvasSize() {
   canvas.style.height = Math.round((w * 9) / 16) + 'px'
 }
 const drone = computed(() => drones.value.find((d) => d.id === videoDroneId.value) ?? null)
+// B5：无人机归舱 → 图传信号丢失，3 秒后自动关窗
+const signalLost = computed(() => drone.value?.status === 'docked')
+let lostTimer: ReturnType<typeof setTimeout> | undefined
+watch(signalLost, (lost) => {
+  if (lost) lostTimer = setTimeout(() => closeVideo(), 3000)
+  else clearTimeout(lostTimer)
+})
 const scene = computed(() => {
   const d = drone.value
   if (!d) return 'city' as const
@@ -39,7 +46,7 @@ let frame = 0
 function draw() {
   const canvas = canvasRef.value
   const d = drone.value
-  if (!canvas || !d) { raf = requestAnimationFrame(draw); return }
+  if (!canvas || !d || signalLost.value) { raf = requestAnimationFrame(draw); return }
   const ctx = canvas.getContext('2d')
   if (!ctx) return
   const W = canvas.width
@@ -140,6 +147,7 @@ onMounted(() => { raf = requestAnimationFrame(draw) })
 onBeforeUnmount(() => {
   cancelAnimationFrame(raf)
   resizeObserver?.disconnect()
+  clearTimeout(lostTimer)
 })
 
 // 视频窗是 v-if 后渲染的，rootRef 出现时才挂 ResizeObserver
@@ -162,7 +170,10 @@ watch(videoDroneId, () => { frame = 0 })
       <span class="video-feed__signal">信号 {{ '▮'.repeat(signalBars(drone)) }}{{ '▯'.repeat(5 - signalBars(drone)) }}</span>
       <button class="video-feed__close" @click="closeVideo">✕</button>
     </div>
-    <canvas ref="canvasRef" class="video-feed__canvas" width="352" height="198" />
+    <div class="video-feed__screen">
+      <canvas ref="canvasRef" class="video-feed__canvas" width="352" height="198" />
+      <div v-if="signalLost" class="video-feed__lost">📡 信号丢失 · 无人机已归舱</div>
+    </div>
     <div class="video-feed__foot">
       {{ scene === 'flood' ? '🌊 洪灾勘测画面（模拟图传）' : '🏙 巡逻画面（模拟图传）' }} · {{ drone.taskName }}
     </div>
@@ -224,7 +235,21 @@ watch(videoDroneId, () => { frame = 0 })
     &:hover { color: #fff; }
   }
 
+  &__screen { position: relative; }
+
   &__canvas { display: block; width: 100%; }
+
+  &__lost {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    color: #ff8a8a;
+    background: rgba(4, 10, 20, 0.85);
+    letter-spacing: 1px;
+  }
 
   &__foot {
     padding: 5px 10px;

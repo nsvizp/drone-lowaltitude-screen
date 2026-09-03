@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import {
   createFloodEvent,
+  pickShelters,
   planFloodDispatch,
   type DispatchPlan,
   type FloodEvent,
@@ -9,6 +10,7 @@ import {
 } from '@/sim/disaster'
 import {
   assessSituation,
+  detectSupplyDrops,
   evaluateReinforcement,
   initSituation,
   recordDelivery,
@@ -53,14 +55,17 @@ const evalResult = ref<ReinforcementEval | null>(null)
 const reinforced = ref(false)
 const videoDroneId = ref<string | null>(null)
 
-let recordedDockedDeliveries = 0
+let prevLegs = new Map<string, number>()
+const recordedDrops = new Set<string>()
 let hookRegistered = false
 
 function refreshEval(fleet: FleetState): void {
   if (!situation.value) return
   const surveyCount = fleet.drones.filter((d) => d.mission === 'survey' && d.status !== 'docked').length
-  summaryRef.value = summarizeSituation(situation.value, Math.max(surveyCount, 1))
-  evalResult.value = evaluateReinforcement(summaryRef.value, fleet)
+  const nextSummary = summarizeSituation(situation.value, Math.max(surveyCount, 1))
+  if (JSON.stringify(nextSummary) !== JSON.stringify(summaryRef.value)) summaryRef.value = nextSummary
+  const nextEval = evaluateReinforcement(nextSummary, fleet)
+  if (JSON.stringify(nextEval) !== JSON.stringify(evalResult.value)) evalResult.value = nextEval
 }
 
 function onTick(fleet: FleetState): void {
@@ -73,19 +78,23 @@ function onTick(fleet: FleetState): void {
     situation.value = assessSituation(situation.value, rng, fleet.tickCount, surveyor.name)
   }
 
-  // 投送完成登记（delivery 归舱即视为该架次完成投送）
-  const dockedDeliveries = fleet.drones.filter((d) => d.mission === 'delivery' && d.status === 'docked').length
-  if (dockedDeliveries > recordedDockedDeliveries) {
-    const newSorties = dockedDeliveries - recordedDockedDeliveries
-    recordedDockedDeliveries = dockedDeliveries
-    situation.value = recordDelivery(situation.value, newSorties * PACKS_PER_SORTIE)
+  // 投送登记：越过灾点那一刻即空投完成（不等返程归舱）
+  const drops = detectSupplyDrops(fleet, prevLegs)
+  prevLegs = drops.nextLegs
+  const newDrops = drops.droppedIds.filter((id) => !recordedDrops.has(id))
+  if (newDrops.length > 0) {
+    for (const id of newDrops) recordedDrops.add(id)
+    const names = newDrops
+      .map((id) => fleet.drones.find((d) => d.id === id)?.name ?? id)
+      .join('、')
+    situation.value = recordDelivery(situation.value, newDrops.length * PACKS_PER_SORTIE)
     situation.value = {
       ...situation.value,
       events: [...situation.value.events, {
         seq: situation.value.events.length + 1,
         tick: fleet.tickCount,
         kind: 'supply' as const,
-        text: '投送组：' + newSorties + ' 个架次物资已送达并返舱（+' + newSorties * PACKS_PER_SORTIE + ' 件）',
+        text: '投送组：' + names + ' 已在灾点上空空投（+' + newDrops.length * PACKS_PER_SORTIE + ' 件），正在返航',
       }].slice(-30),
     }
   }
@@ -133,13 +142,14 @@ export function useDisaster() {
     summaryRef.value = null
     evalResult.value = null
     reinforced.value = false
-    recordedDockedDeliveries = 0
+    prevLegs = new Map()
+    recordedDrops.clear()
   }
 
   /** 执行二次调配增援：增派勘测机 + 追加投送架次 */
   const executeReinforcement = () => {
     if (!flood.value || !evalResult.value?.needed || reinforced.value || !plan.value) return
-    const shelter = SHELTERS[1] // 次近方舱（演示：2号方舱）
+    const shelter = pickShelters(SHELTERS, flood.value, 2)[1] ?? SHELTERS[0] // 次近方舱（按实际距离）
     launch({
       name: 'DJI-M350-R1',
       home: shelter.position,

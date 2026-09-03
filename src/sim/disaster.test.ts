@@ -4,11 +4,13 @@ import { createEmergencyData, routesBBox } from './emergency-data'
 import {
   createFloodEvent,
   pickRestedFlyers,
+  pickShelters,
   pickSupplySite,
   planFloodDispatch,
   type FlyerInfo,
   type ShelterInfo,
 } from './disaster'
+import { EMERGENCY_SPEED } from './drone-sim'
 
 const routes = createShanghaiRoutes()
 const bbox = routesBBox()
@@ -101,5 +103,34 @@ describe('planFloodDispatch 调配引擎', () => {
     const plan = planFloodDispatch(fleet, noSpare, FLYERS, [], flood)
     expect(plan.delivery).toBeNull()
     expect(plan.warnings.length).toBeGreaterThan(0)
+  })
+})
+
+describe('B1 pickShelters 增援方舱按距离排序', () => {
+  it('灾点在 3号方舱旁时：最近=3号，次近=1号（不是写死的 2号）', () => {
+    const flood = { id: 'f', position: [121.5950, 31.2050] as [number, number], severity: 2 as const, createdTick: 0 }
+    const picked = pickShelters(SHELTERS, flood, 2)
+    expect(picked[0].name).toBe('3号方舱')
+    expect(picked[1].name).toBe('1号方舱')
+  })
+
+  it('无备用机的方舱不参与增援挑选', () => {
+    const flood = { id: 'f', position: [121.5950, 31.2050] as [number, number], severity: 2 as const, createdTick: 0 }
+    const noSpare3 = SHELTERS.map((s) => (s.id === 4003 ? { ...s, spareDrones: 0 } : s))
+    const picked = pickShelters(noSpare3, flood, 2)
+    expect(picked[0].name).toBe('1号方舱')
+  })
+})
+
+describe('B3 ETA 按应急速度计算', () => {
+  it('etaSec = 距离 / EMERGENCY_SPEED', () => {
+    let fleet = createFleet(routes, 8, mulberry32(20260513))
+    for (let i = 0; i < 60; i++) fleet = advanceFleet(fleet, routes, 3000)
+    const flood = createFloodEvent(mulberry32(42), bbox, fleet.tickCount)
+    const plan = planFloodDispatch(fleet, SHELTERS, FLYERS, createEmergencyData(mulberry32(20260903)).supplies, flood)
+    for (const s of plan.survey) {
+      const expected = Math.round((s.distanceKm * 1000) / EMERGENCY_SPEED)
+      expect(Math.abs(s.etaSec - expected)).toBeLessThanOrEqual(2)
+    }
   })
 })

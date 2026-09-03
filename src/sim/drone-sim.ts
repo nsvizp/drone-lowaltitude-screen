@@ -40,6 +40,8 @@ export interface DroneState {
   orbitAngle: number
   /** 归属点（方舱/航线起点），低电量返航目标 */
   home: LngLat
+  /** 归舱时刻（tick），未归舱为 null；用于保留期清理 */
+  dockedAt: number | null
 }
 
 export interface FleetState {
@@ -55,6 +57,10 @@ export const ARRIVAL_THRESHOLD_M = 40
 export const ORBIT_RADIUS_M = 500
 /** 低电量返航阈值 */
 export const LOW_BATTERY_RTB = 15
+/** 应急改飞速度 m/s（勘测/增援改派时提速至此） */
+export const EMERGENCY_SPEED = 22
+/** 归舱后保留 tick 数（无航线机型超过即清理出机队） */
+export const DOCKED_RETENTION_TICKS = 300
 
 /** mulberry32 确定性伪随机数发生器，便于测试复现 */
 export function mulberry32(seed: number): () => number {
@@ -217,6 +223,7 @@ export function createFleet(routes: DroneRoute[], count: number, rng: () => numb
       orbitCenter: null,
       orbitAngle: 0,
       home: route.points[0],
+      dockedAt: null,
     })
   }
   return { drones, tickCount: 0 }
@@ -342,7 +349,8 @@ function patrolStep(drone: DroneState, routes: DroneRoute[], dtSec: number): Dro
  */
 export function advanceFleet(state: FleetState, routes: DroneRoute[], dtMs: number): FleetState {
   const dtSec = dtMs / 1000
-  const drones = state.drones.map((drone) => {
+  const nextTick = state.tickCount + 1
+  const stepped = state.drones.map((drone) => {
     if (drone.status === 'docked') {
       // 勘测机回巢换电完毕 → 回到自己的固定巡逻航线重新上岗（home 即航线起点，无跳变）
       // 无巡逻航线的增援机（routeId 不在 routes 中）留在舱内待命
@@ -374,7 +382,20 @@ export function advanceFleet(state: FleetState, routes: DroneRoute[], dtMs: numb
 
     return patrolStep(drone, routes, dtSec)
   })
-  return { drones, tickCount: state.tickCount + 1 }
+  // 新归舱的盖章 dockedAt；无航线机型超过保留期后清理出机队
+  const stamped = stepped.map((d, i) =>
+    d.status === 'docked' && state.drones[i].status !== 'docked' ? { ...d, dockedAt: nextTick } : d,
+  )
+  const drones = stamped.filter(
+    (d) =>
+      !(
+        d.status === 'docked' &&
+        d.dockedAt !== null &&
+        nextTick - d.dockedAt > DOCKED_RETENTION_TICKS &&
+        !routes.some((r) => r.id === d.routeId)
+      ),
+  )
+  return { drones, tickCount: nextTick }
 }
 
 /** 改派一架无人机飞往目标点执行任务（勘测用）。纯函数。 */
@@ -383,7 +404,7 @@ export function divertDrone(state: FleetState, droneId: string, target: LngLat, 
     ...state,
     drones: state.drones.map((d) =>
       d.id === droneId
-        ? { ...d, mission, status: 'flying' as DroneStatus, plannedRoute: [target], orbitCenter: null, progress: 0, speed: Math.max(d.speed, 22) }
+        ? { ...d, mission, status: 'flying' as DroneStatus, plannedRoute: [target], orbitCenter: null, progress: 0, speed: Math.max(d.speed, EMERGENCY_SPEED) }
         : d,
     ),
   }
@@ -417,6 +438,7 @@ export function launchDrone(
     orbitCenter: null,
     orbitAngle: 0,
     home: opts.home,
+    dockedAt: null,
   }
   return { ...state, drones: [...state.drones, drone] }
 }

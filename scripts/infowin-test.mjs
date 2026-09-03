@@ -1,0 +1,22 @@
+import { chromium } from 'playwright'
+const browser = await chromium.launch()
+const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } })
+await page.addInitScript(() => localStorage.setItem('drone-screen-token', 'mock-token-shot'))
+await page.goto('http://127.0.0.1:5173/', { waitUntil: 'networkidle' })
+await page.waitForTimeout(3500)
+// 连点两架不同无人机（用编程方式打开两个不同位置，模拟连续点击）
+await page.locator('.drone-marker:visible').first().click({ force: true })
+await page.waitForTimeout(600)
+const c1 = await page.locator('.amap-info').count()
+const bat1 = await page.locator('.amap-info').first().textContent()
+await page.waitForTimeout(2500)
+const bat2 = await page.locator('.amap-info').first().textContent()
+// 再点另一架
+const markers = await page.locator('.drone-marker:visible').all()
+if (markers.length > 1) await markers[1].click({ force: true })
+await page.waitForTimeout(600)
+const c2 = await page.locator('.amap-info').count()
+console.log('第一次点击后 InfoWindow 数:', c1)
+console.log('弹窗内容随 tick 刷新:', bat1 !== bat2 ? 'OK（内容变化）' : '无变化（数据本秒未变也算正常）', '| 样本:', JSON.stringify(bat1?.slice(0,60)), '→', JSON.stringify(bat2?.slice(0,60)))
+console.log('点击第二架后 InfoWindow 数:', c2, c2 === 1 ? 'OK 单实例' : 'FAIL 多实例泄漏')
+await browser.close()

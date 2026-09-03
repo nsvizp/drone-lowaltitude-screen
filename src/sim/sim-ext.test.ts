@@ -83,12 +83,17 @@ describe('v4 方舱起飞投送（launchDrone）', () => {
     expect(delivery.lng).toBeCloseTo(shelter[0])
     expect(delivery.lat).toBeCloseTo(shelter[1])
 
-    for (let i = 0; i < 400; i++) fleet = advanceFleet(fleet, routes, 5000)
-    const done = fleet.drones[2]
-    expect(done.status).toBe('docked')
-    expect(done.lng).toBeCloseTo(shelter[0], 3)
-    expect(done.lat).toBeCloseTo(shelter[1], 3)
-    expect(done.battery).toBe(100) // 归舱满电
+    // 轮询直到归舱（之后会被保留期清理，所以归舱当下就要断言）
+    let docked: (typeof fleet.drones)[number] | undefined
+    for (let i = 0; i < 400 && !docked; i++) {
+      fleet = advanceFleet(fleet, routes, 5000)
+      const d = fleet.drones.find((x) => x.id === 'delivery-1')
+      if (d?.status === 'docked') docked = d
+    }
+    expect(docked).toBeDefined()
+    expect(docked!.lng).toBeCloseTo(shelter[0], 3)
+    expect(docked!.lat).toBeCloseTo(shelter[1], 3)
+    expect(docked!.battery).toBe(100) // 归舱满电
   })
 
   it('归舱后不再计入在飞统计', () => {

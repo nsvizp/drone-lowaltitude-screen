@@ -52,6 +52,7 @@ export function useDrones(count = 8) {
   if (!timer) {
     timer = setInterval(() => {
       if (!fleet) return
+      if (typeof document !== 'undefined' && document.hidden) return // 后台标签页零消耗
       fleet = advanceFleet(fleet, routes.value, TICK_MS * SIM_SPEED)
       snapshot()
       for (const fn of tickHooks) fn(fleet)

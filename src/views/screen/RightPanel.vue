@@ -19,9 +19,12 @@ const STATUS_META: { key: TaskStatus; label: string; numKey: keyof TaskOverview;
   { key: 'completed', label: '已结单', numKey: 'completedNum', pctKey: 'completedPercent', color: '#a66bff' },
 ]
 
+// B7：请求序号——快速切换周期时只采纳最后一次响应，防止旧数据覆盖
+let taskReqSeq = 0
 async function loadTask() {
+  const seq = ++taskReqSeq
   const res = await openTaskOverview(period.value)
-  task.value = res.data
+  if (seq === taskReqSeq) task.value = res.data
 }
 watch(period, loadTask)
 

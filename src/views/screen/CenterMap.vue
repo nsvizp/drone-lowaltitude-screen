@@ -72,6 +72,37 @@ let satelliteLayer: any = null
 const droneMarkers = new Map<string, any>()
 let disposed = false
 
+/** B4：全局唯一 InfoWindow，无人机弹窗内容随 tick 实时刷新 */
+let infoWin: any = null
+let infoDroneId: string | null = null
+let lastInfoContent = ''
+
+function getInfoWin(): any {
+  const AMap = window.AMap
+  if (!infoWin) {
+    infoWin = new AMap.InfoWindow({ offset: new AMap.Pixel(0, -24) })
+    infoWin.on('close', () => { infoDroneId = null })
+  }
+  return infoWin
+}
+
+function openDroneInfo(d: DroneState) {
+  infoDroneId = d.id
+  const html = droneInfoHtml(d)
+  lastInfoContent = html
+  const win = getInfoWin()
+  win.setContent(html)
+  win.open(map, [d.lng, d.lat])
+}
+
+function openStaticInfo(content: string, position: [number, number]) {
+  infoDroneId = null
+  lastInfoContent = content
+  const win = getInfoWin()
+  win.setContent(content)
+  win.open(map, position)
+}
+
 const STATUS_COLOR: Record<DroneState['status'], string> = {
   flying: '#00e5ff',
   hovering: '#ffd666',
@@ -186,6 +217,7 @@ async function initMap() {
         lineJoin: 'round',
       })
       routeLines.push(line)
+      if (routeVisible.value) line.setMap(map) // B6：加载前已勾选则直接上图
     })
 
     // 方舱
@@ -207,13 +239,8 @@ async function initMap() {
           content: emergencyMarkerHtml(p),
           offset: new AMap.Pixel(-30, -20),
         })
-        marker.on('click', () => {
-          new AMap.InfoWindow({
-            content: emergencyInfoHtml(p),
-            offset: new AMap.Pixel(0, -20),
-          }).open(map, p.position)
-        })
-        marker.hide()
+        marker.on('click', () => openStaticInfo(emergencyInfoHtml(p), p.position))
+        if (!layerVisibility.value[layer.key]) marker.hide() // B6：尊重加载前的勾选
         layerMarkers[layer.key].push(marker)
       }
     }
@@ -235,17 +262,17 @@ function createDroneMarker(d: DroneState) {
     content: droneMarkerHtml(d),
     offset: new AMap.Pixel(-40, -20),
   })
-  marker.on('click', () => {
-    new AMap.InfoWindow({
-      content: droneInfoHtml(d),
-      offset: new AMap.Pixel(0, -24),
-    }).open(map, [d.lng, d.lat])
-  })
+  marker.on('click', () => openDroneInfo(d))
   droneMarkers.set(d.id, marker)
   return marker
 }
 
 const PLANNED_COLOR: Record<string, string> = { survey: '#ff6b6b', delivery: '#ffd666' }
+
+/** P1：marker 内容缓存（heading 量化 5° 桶 + 状态），不变不重建 DOM */
+const markerContentCache = new Map<string, string>()
+/** P2：航迹颜色缓存，变化才调 setOptions */
+const trackColorCache = new Map<string, string>()
 
 // 实时同步无人机位置 + 航迹尾线 + 动态计划航线
 watch(drones, (list) => {
@@ -253,7 +280,10 @@ watch(drones, (list) => {
   const AMap = window.AMap
   for (const d of list) {
     let marker = droneMarkers.get(d.id)
-    if (!marker) marker = createDroneMarker(d) // 投送/增援机动态起飞
+    if (!marker) {
+      marker = createDroneMarker(d) // 投送/增援机动态起飞
+      markerContentCache.set(d.id, d.status + '|' + Math.round(d.heading / 5) * 5)
+    }
     if (d.status === 'docked') {
       marker.hide()
       // 归舱后移除航迹与计划航线，避免模拟机残留地图
@@ -261,25 +291,48 @@ watch(drones, (list) => {
       if (track) { map.remove(track); trackLines.delete(d.id) }
       const planned0 = plannedLines.get(d.id)
       if (planned0) { map.remove(planned0); plannedLines.delete(d.id) }
+      // B4/B5 联动：正在看的无人机归舱 → 关闭弹窗
+      if (infoDroneId === d.id && infoWin) { infoWin.close(); infoDroneId = null }
       continue
     }
     marker.show()
     marker.setPosition([d.lng, d.lat])
-    marker.setContent(droneMarkerHtml(d))
+
+    // P1：内容缓存——状态或朝向桶变化才重建 DOM
+    const contentKey = d.status + '|' + Math.round(d.heading / 5) * 5
+    if (markerContentCache.get(d.id) !== contentKey) {
+      marker.setContent(droneMarkerHtml(d))
+      markerContentCache.set(d.id, contentKey)
+    }
+
+    // B4：弹窗开着时随 tick 刷新内容与位置
+    if (infoDroneId === d.id && infoWin) {
+      const html = droneInfoHtml(d)
+      if (html !== lastInfoContent) {
+        lastInfoContent = html
+        infoWin.setContent(html)
+      }
+      infoWin.setPosition([d.lng, d.lat])
+    }
 
     // 航迹尾线（实线渐隐）
     if (d.track.length > 1) {
       let line = trackLines.get(d.id)
+      const color = STATUS_COLOR[d.status]
       if (!line) {
         line = new AMap.Polyline({
-          map, strokeColor: STATUS_COLOR[d.status], strokeWeight: 2,
+          map, strokeColor: color, strokeWeight: 2,
           strokeOpacity: 0.45, lineJoin: 'round', showDir: true,
         })
         trackLines.set(d.id, line)
+        trackColorCache.set(d.id, color)
       }
       line.setPath(d.track)
-      // 颜色跟随实时状态（返航↔飞行切换后不再滞后）
-      line.setOptions({ strokeColor: STATUS_COLOR[d.status] })
+      // P2：颜色跟随实时状态，但只在变化时调用
+      if (trackColorCache.get(d.id) !== color) {
+        line.setOptions({ strokeColor: color })
+        trackColorCache.set(d.id, color)
+      }
     }
 
     // 动态计划航线（改派/投送时虚线指向目标）
