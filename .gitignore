@@ -1,0 +1,8 @@
+node_modules
+dist
+.env.local
+.deploy.env
+*.log
+.DS_Store
+shots/
+drone-screen-deploy.tar.gz

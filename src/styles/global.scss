@@ -1,0 +1,43 @@
+:root {
+  --screen-bg: #04142b;
+  --panel-bg: rgba(9, 32, 63, 0.72);
+  --panel-border: rgba(47, 128, 237, 0.45);
+  --primary: #2f80ed;
+  --primary-light: #56ccf2;
+  --accent: #00e5ff;
+  --warn: #ff6b6b;
+  --ok: #52d273;
+  --text-main: #d8e6ff;
+  --text-dim: #7d9bc4;
+  --font-num: 'DIN Alternate', 'Bahnschrift', 'Segoe UI', sans-serif;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body, #app {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--screen-bg);
+  color: var(--text-main);
+  font-family: 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', sans-serif;
+}
+
+/* 大屏设计基准 1920x1080，等比缩放适配 16:9 ~ 48:9 */
+.screen-scale-viewport {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: radial-gradient(ellipse at center, #072042 0%, #04142b 70%);
+}
+
+.screen-scale-stage {
+  position: absolute;
+  width: 1920px;
+  height: 1080px;
+  transform-origin: top left;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-thumb { background: rgba(47, 128, 237, 0.5); border-radius: 2px; }
+::-webkit-scrollbar-track { background: transparent; }

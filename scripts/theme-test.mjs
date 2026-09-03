@@ -1,0 +1,18 @@
+import { chromium } from 'playwright'
+const browser = await chromium.launch()
+const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } })
+await page.addInitScript(() => localStorage.setItem('drone-screen-token', 'mock-token-shot'))
+await page.goto('http://127.0.0.1:5173/', { waitUntil: 'networkidle' })
+await page.waitForTimeout(3000)
+await page.getByRole('button', { name: '卫星图' }).click()
+await page.waitForTimeout(2500)
+await page.screenshot({ path: 'shots/5-satellite.png' })
+await page.getByRole('button', { name: '电子地图' }).click()
+await page.waitForTimeout(2500)
+await page.screenshot({ path: 'shots/6-normal.png' })
+// 点击无人机 marker 查看详情弹窗
+await page.locator('.drone-marker').first().click()
+await page.waitForTimeout(800)
+await page.screenshot({ path: 'shots/7-drone-info.png' })
+await browser.close()
+console.log('theme test done')
