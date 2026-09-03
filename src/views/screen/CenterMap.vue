@@ -2,7 +2,8 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AMapLoader from '@amap/amap-jsapi-loader'
 import { useDrones } from '@/composables/useDrones'
-import { SHANGHAI_CENTER, type DroneState } from '@/sim/drone-sim'
+import { mulberry32, SHANGHAI_CENTER, type DroneState } from '@/sim/drone-sim'
+import { createEmergencyData, type EmergencyCategory, type EmergencyPoint } from '@/sim/emergency-data'
 
 declare global {
   interface Window {
@@ -27,6 +28,25 @@ const SHELTERS = [
   { id: 4003, name: '3号方舱', position: [121.5950, 31.2050] as [number, number] },
   { id: 4004, name: '4号方舱', position: [121.3330, 31.2000] as [number, number] },
 ]
+
+/** 应急资源图层元数据 */
+const EMERGENCY_LAYERS: { key: EmergencyCategory; label: string; color: string; icon: string }[] = [
+  { key: 'supplies', label: '模拟物资', color: '#ffd666', icon: '📦' },
+  { key: 'personnel', label: '应急人员', color: '#52d273', icon: '👷' },
+  { key: 'vehicles', label: '应急车辆', color: '#ff6b6b', icon: '🚒' },
+]
+
+/** 模拟数据（确定性 seed，与无人机轨迹同范围） */
+const emergencyData = createEmergencyData(mulberry32(20260903))
+
+/** 图层显隐：默认全部不显示 */
+const layerVisibility = ref<Record<EmergencyCategory, boolean>>({
+  supplies: false,
+  personnel: false,
+  vehicles: false,
+})
+
+const layerMarkers: Record<EmergencyCategory, any[]> = { supplies: [], personnel: [], vehicles: [] }
 
 let map: any = null
 let satelliteLayer: any = null
@@ -62,6 +82,33 @@ function droneInfoHtml(d: DroneState): string {
   )
 }
 
+function emergencyMeta(category: EmergencyCategory) {
+  return EMERGENCY_LAYERS.find((l) => l.key === category)!
+}
+
+function emergencyMarkerHtml(p: EmergencyPoint): string {
+  const meta = emergencyMeta(p.category)
+  return (
+    '<div class="emergency-marker" style="--c:' + meta.color + '">' +
+    '<div class="emergency-marker__icon">' + meta.icon + '</div>' +
+    '<div class="emergency-marker__label">' + p.name + '</div>' +
+    '</div>'
+  )
+}
+
+function emergencyInfoHtml(p: EmergencyPoint): string {
+  const meta = emergencyMeta(p.category)
+  return (
+    '<div style="background:#0a2140;color:#d8e6ff;padding:10px 14px;border:1px solid ' + meta.color + ';border-radius:6px;font-size:12px;min-width:190px">' +
+    '<div style="font-size:14px;font-weight:700;color:' + meta.color + ';margin-bottom:6px">' + meta.icon + ' ' + p.name + '</div>' +
+    '<div>类别：' + meta.label + '</div>' +
+    '<div>明细：' + p.detail + '</div>' +
+    '<div>单位：' + p.org + '</div>' +
+    '<div>状态：' + p.status + '</div>' +
+    '</div>'
+  )
+}
+
 function applyTheme(t: MapTheme) {
   if (!map || !window.AMap) return
   const AMap = window.AMap
@@ -78,6 +125,12 @@ function applyTheme(t: MapTheme) {
 function setTheme(t: MapTheme) {
   theme.value = t
   applyTheme(t)
+}
+
+function toggleLayer(key: EmergencyCategory) {
+  layerVisibility.value[key] = !layerVisibility.value[key]
+  const visible = layerVisibility.value[key]
+  for (const m of layerMarkers[key]) visible ? m.show() : m.hide()
 }
 
 async function initMap() {
@@ -122,6 +175,26 @@ async function initMap() {
       })
     }
 
+    // 应急资源图层（默认隐藏）
+    for (const layer of EMERGENCY_LAYERS) {
+      for (const p of emergencyData[layer.key]) {
+        const marker = new AMap.Marker({
+          map,
+          position: p.position,
+          content: emergencyMarkerHtml(p),
+          offset: new AMap.Pixel(-30, -20),
+        })
+        marker.on('click', () => {
+          new AMap.InfoWindow({
+            content: emergencyInfoHtml(p),
+            offset: new AMap.Pixel(0, -20),
+          }).open(map, p.position)
+        })
+        marker.hide()
+        layerMarkers[layer.key].push(marker)
+      }
+    }
+
     // 无人机初始 marker
     for (const d of drones.value) {
       const marker = new AMap.Marker({
@@ -161,6 +234,9 @@ onMounted(initMap)
 onBeforeUnmount(() => {
   disposed = true
   droneMarkers.clear()
+  layerMarkers.supplies = []
+  layerMarkers.personnel = []
+  layerMarkers.vehicles = []
   map?.destroy()
   map = null
 })
@@ -181,6 +257,22 @@ onBeforeUnmount(() => {
       <span class="center-map__chip center-map__chip--fly">飞行中 {{ summary.flying }}</span>
       <span class="center-map__chip center-map__chip--return">返航 {{ summary.returning }}</span>
       <span class="center-map__chip center-map__chip--warn">低电量 {{ summary.lowBattery }}</span>
+    </div>
+
+    <div class="center-map__layers">
+      <div class="center-map__layers-title">图层</div>
+      <button
+        v-for="l in EMERGENCY_LAYERS"
+        :key="l.key"
+        class="center-map__layer"
+        :class="{ 'center-map__layer--active': layerVisibility[l.key] }"
+        :style="{ '--layer-color': l.color }"
+        @click="toggleLayer(l.key)"
+      >
+        <span class="center-map__layer-check">{{ layerVisibility[l.key] ? '✓' : '' }}</span>
+        {{ l.icon }} {{ l.label }}
+        <span class="center-map__layer-count">{{ emergencyData[l.key].length }}</span>
+      </button>
     </div>
 
     <div class="center-map__themes">
@@ -258,6 +350,64 @@ onBeforeUnmount(() => {
     &--warn { color: var(--warn); }
   }
 
+  &__layers {
+    position: absolute;
+    top: 48px;
+    left: 12px;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    background: rgba(6, 24, 48, 0.85);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+
+    &-title {
+      font-size: 11px;
+      color: var(--text-dim);
+      letter-spacing: 2px;
+      padding: 0 4px 2px;
+    }
+  }
+
+  &__layer {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px 5px 6px;
+    font-size: 12px;
+    color: var(--text-main);
+    background: rgba(6, 24, 48, 0.7);
+    border: 1px solid rgba(47, 128, 237, 0.3);
+    border-radius: 4px;
+    cursor: pointer;
+    text-align: left;
+
+    &--active {
+      border-color: var(--layer-color);
+      box-shadow: inset 0 0 10px rgba(0, 229, 255, 0.08);
+    }
+
+    &-check {
+      width: 14px;
+      height: 14px;
+      border: 1px solid var(--panel-border);
+      border-radius: 3px;
+      font-size: 10px;
+      line-height: 13px;
+      text-align: center;
+      color: var(--layer-color);
+    }
+
+    &-count {
+      margin-left: auto;
+      font-family: var(--font-num);
+      font-size: 11px;
+      color: var(--layer-color);
+    }
+  }
+
   &__themes {
     position: absolute;
     top: 12px;
@@ -301,6 +451,29 @@ onBeforeUnmount(() => {
 }
 
 .drone-marker__label {
+  pointer-events: none;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--c);
+  background: rgba(4, 20, 43, 0.8);
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.emergency-marker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  filter: drop-shadow(0 0 5px var(--c));
+}
+
+.emergency-marker__icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.emergency-marker__label {
   pointer-events: none;
   margin-top: 2px;
   font-size: 10px;
