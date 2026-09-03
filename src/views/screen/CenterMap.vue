@@ -268,6 +268,8 @@ watch(drones, (list) => {
         trackLines.set(d.id, line)
       }
       line.setPath(d.track)
+      // 颜色跟随实时状态（返航↔飞行切换后不再滞后）
+      line.setOptions({ strokeColor: STATUS_COLOR[d.status] })
     }
 
     // 动态计划航线（改派/投送时虚线指向目标）
