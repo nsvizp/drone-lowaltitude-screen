@@ -1,6 +1,12 @@
 # 应急指挥调度平台 — 后端建设方案（待评审）
 
-> 状态：**待你决策，未实施**。本方案回答三件事：后端怎么建、硬编码密钥/配置怎么入库、前端怎么切换。
+> 状态：**决策已锁定（2026-09-04），M1 实施中**
+>
+> 已拍板：
+> 1. 技术栈 **A：NestJS + Prisma**，数据库 **SQLite 单文件**（backend/data/app.db，WAL 模式；不上 Docker，将来可平滑迁 PG）
+> 2. 模拟引擎**迁入后端**，WebSocket 推送（权威模拟器，多开大屏状态一致）
+> 3. 认证**单管理员账号** + 服务端失败锁定
+> 4. 开发工作流：无 Docker；后端 pnpm dev（tsx watch 热重载），改代码秒级生效，只有部署时才 build
 
 ## 1. 现状盘点：需要后端化的东西
 
@@ -15,7 +21,7 @@
 | 仓储台账写死 12 条 | sim/dispatch-board.ts | warehouses + warehouse_stock 表 |
 | 方舱/飞手名册写死 | useDisaster.ts | shelters / flyers 表 |
 
-## 2. 技术选型（二选一，需你拍板）
+## 2. 技术选型（已选定 A，DB 改为 SQLite）
 
 | 维度 | 方案 A：NestJS + PostgreSQL + Prisma（**推荐**） | 方案 B：Spring Boot + MySQL |
 |---|---|---|
@@ -101,7 +107,7 @@
 
 | 里程碑 | 内容 | 预估 |
 |---|---|---|
-| M1 骨架+配置+认证 | NestJS 工程、PostgreSQL、system_config、登录/锁定服务端化、前端配置拉取 | 1~1.5 天 |
+| M1 骨架+配置+认证 | NestJS 工程、SQLite(Prisma)、system_config、登录/锁定服务端化、前端配置拉取 | 1~1.5 天 |
 | M2 业务接口 | 6 个统计接口 + 台账接口（机队/方舱/飞手/仓储） | 1~2 天 |
 | M3 实时化 | 模拟引擎迁入后端、WS 推送、事件/节点入库 | 2 天 |
 | M4 部署 | docker-compose（postgres+backend）、部署到 10.10.12.185 | 0.5 天 |

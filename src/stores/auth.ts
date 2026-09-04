@@ -7,27 +7,38 @@ interface LoginParams {
   password: string
 }
 
-/** Mock 登录：账号 admin / 密码 Admin@2026（强密码；真实后端接入后替换为接口调用） */
-const MOCK_USER = { username: 'admin', password: 'Admin@2026', displayName: 'Admin' }
+/** 登录错误：透传服务端锁定信息 */
+export class LoginError extends Error {
+  remainSec = 0
+  attemptsLeft: number | undefined
+}
 
+/** 调后端 /api/auth/login（bcrypt 校验 + 服务端失败锁定） */
 export const useAuthStore = defineStore('auth', {
   state: () => ({
     token: localStorage.getItem(TOKEN_KEY) ?? '',
-    displayName: localStorage.getItem(TOKEN_KEY) ? MOCK_USER.displayName : '',
+    displayName: localStorage.getItem(TOKEN_KEY) ? 'Admin' : '',
   }),
   getters: {
     isLoggedIn: (s) => s.token !== '',
   },
   actions: {
     async login({ username, password }: LoginParams): Promise<void> {
-      await new Promise((r) => setTimeout(r, 300))
-      if (username === MOCK_USER.username && password === MOCK_USER.password) {
-        this.token = 'mock-token-' + Date.now()
-        this.displayName = MOCK_USER.displayName
-        localStorage.setItem(TOKEN_KEY, this.token)
-        return
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const err = new LoginError(body.message ?? '登录失败')
+        err.remainSec = body.remainSec ?? 0
+        err.attemptsLeft = body.attemptsLeft
+        throw err
       }
-      throw new Error('用户名或密码错误')
+      this.token = body.token
+      this.displayName = body.displayName
+      localStorage.setItem(TOKEN_KEY, this.token)
     },
     logout() {
       this.token = ''

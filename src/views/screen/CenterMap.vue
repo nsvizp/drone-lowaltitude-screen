@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AMapLoader from '@amap/amap-jsapi-loader'
+import { loadPublicConfig } from '@/api/config'
 import { useDrones } from '@/composables/useDrones'
 import { mulberry32, SHANGHAI_CENTER, type DroneState } from '@/sim/drone-sim'
 import { createEmergencyData, type EmergencyCategory, type EmergencyPoint } from '@/sim/emergency-data'
@@ -186,14 +187,14 @@ function toggleLayer(key: EmergencyCategory) {
 }
 
 async function initMap() {
-  const key = import.meta.env.VITE_AMAP_KEY
+  const config = await loadPublicConfig()
+  const key = config.amapKey
   if (!key) {
-    mapError.value = '未配置高德地图 Key：请在项目根目录创建 .env.local，填入 VITE_AMAP_KEY 与 VITE_AMAP_SECURITY_CODE（参考 .env.example）'
+    mapError.value = '未配置高德地图 Key：后端 system_config 表与 .env.local 均未提供'
     return
   }
   try {
-    const securityCode = import.meta.env.VITE_AMAP_SECURITY_CODE
-    if (securityCode) window._AMapSecurityConfig = { securityJsCode: securityCode }
+    if (config.amapSecurityCode) window._AMapSecurityConfig = { securityJsCode: config.amapSecurityCode }
     const AMap = await AMapLoader.load({ key, version: '2.0' })
     if (disposed || !mapEl.value) return
     map = new AMap.Map(mapEl.value, {

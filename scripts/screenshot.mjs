@@ -1,5 +1,6 @@
 // 大屏截图验收脚本：node scripts/screenshot.mjs
 import { chromium } from 'playwright'
+const BASE = process.env.SCREEN_URL ?? 'http://127.0.0.1:5173'
 
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:5173'
 const OUT = new URL('../shots/', import.meta.url).pathname

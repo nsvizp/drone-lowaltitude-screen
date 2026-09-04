@@ -6,7 +6,7 @@
 
 | 模块 | 内容 |
 | --- | --- |
-| 登录页 | 用户名/密码/验证码（mock 账号：admin / Admin@2026），登录成功进大屏、登出回登录页 |
+| 登录页 | 用户名/密码/验证码（admin / Admin@2026，后端 bcrypt 校验）；强密码强制；连续失败 5 次锁 5 分钟（服务端滑窗判定） |
 | 顶部导航 | 实时时间、星期、日期、天气；系统标题；首页（登出）、用户名、头像 |
 | 左栏 | 资源总览（方舱/飞手/航线/架次/计划/工单/里程/时长）+ 飞行案例 TOP10（按执行时间降序，卡片式） |
 | 右栏 | 飞行任务排行榜（今日/本周/本月/本年/累计筛选 × 待派发/派发中/已接单/已结单状态切换，各组织数量与占比）+ 飞行统计分析（ECharts：架次/里程/时长） |
@@ -22,13 +22,20 @@
 ## 快速开始
 
 ```bash
+# 1. 后端（配置/认证/数据库 — 高德 Key 存在 SQLite，不再硬编码）
+cd backend && pnpm install --ignore-workspace
+pnpm exec prisma migrate dev   # 建库（backend/data/app.db）
+pnpm exec tsx prisma/seed.ts   # 种子：admin 账号 + 高德 Key 配置
+pnpm dev                       # http://127.0.0.1:3000/api
+
+# 2. 前端（另开终端，/api 自动代理到 3000）
 pnpm install
-cp .env.example .env.local   # 填入你自己的高德 Key（不要提交）
-pnpm dev                     # http://127.0.0.1:5173
+pnpm dev                       # http://127.0.0.1:5173
 ```
 
-> 高德 Key：到 https://lbs.amap.com/ 申请「Web端(JS API)」类型 Key，并同时配置安全密钥。
-> 未配置 Key 时地图区域会显示配置提示，其余面板正常工作。
+> 配置优先级：后端 /api/config/public（数据库 system_config 表）> .env.local（后端未启动时的离线兜底）。
+> 高德 Key：到 https://lbs.amap.com/ 申请「Web端(JS API)」类型 Key 与安全密钥，写入数据库或 .env.local 均可；
+> 防盗刷请在高德后台配置**域名白名单**。
 
 ## 测试与构建
 

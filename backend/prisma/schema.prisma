@@ -1,0 +1,44 @@
+// SQLite 单文件数据库 — 应急指挥调度平台后端
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- 配置中心（高德 key 等） ----------
+model SystemConfig {
+  key         String   @id
+  value       String
+  isSecret    Boolean  @default(false) @map("is_secret")
+  description String   @default("")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  updatedBy   String   @default("system") @map("updated_by")
+
+  @@map("system_config")
+}
+
+// ---------- 认证 ----------
+model User {
+  id           Int      @id @default(autoincrement())
+  username     String   @unique
+  passwordHash String   @map("password_hash")
+  displayName  String   @map("display_name")
+  role         String   @default("admin")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("users")
+}
+
+model LoginAttempt {
+  id        Int      @id @default(autoincrement())
+  username  String
+  success   Boolean
+  ip        String   @default("")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([username, createdAt])
+  @@map("login_attempts")
+}

@@ -7,7 +7,14 @@ export default defineConfig({
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },
-  server: { port: 5173, host: '127.0.0.1' },
+  server: {
+    port: 5173,
+    host: '127.0.0.1',
+    // 开发期代理到本地后端（NestJS，tsx watch 热重载）
+    proxy: {
+      '/api': { target: process.env.BACKEND_URL ?? 'http://127.0.0.1:3000', changeOrigin: true },
+    },
+  },
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],

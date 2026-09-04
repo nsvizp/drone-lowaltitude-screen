@@ -2,15 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import {
-  checkPasswordStrength,
-  loadGuard,
-  lockRemainSec,
-  recordFailure,
-  recordSuccess,
-  saveGuard,
-  LOCK_THRESHOLD,
-} from '@/stores/login-guard'
+import { checkPasswordStrength } from '@/stores/login-guard'
+import { LoginError } from '@/stores/auth'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -23,18 +16,12 @@ const errorMsg = ref('')
 const loading = ref(false)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 
-// ---------- 错误锁定（localStorage 持久化，刷新不丢） ----------
-let guard = loadGuard()
+// ---------- 错误锁定（服务端判定，前端只做倒计时展示） ----------
+const lockUntil = ref(0)
 const nowTick = ref(Date.now())
 let clockTimer: ReturnType<typeof setInterval> | undefined
-const lockRemain = computed(() => lockRemainSec(guard, nowTick.value))
-const failRemain = ref(LOCK_THRESHOLD - guard.failCount)
-
-function applyGuard(next: typeof guard) {
-  guard = next
-  saveGuard(guard)
-  failRemain.value = LOCK_THRESHOLD - guard.failCount
-}
+const lockRemain = computed(() => Math.max(0, Math.ceil((lockUntil.value - nowTick.value) / 1000)))
+const failRemain = ref<number | null>(null)
 
 const CAPTCHA_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 
@@ -96,14 +83,19 @@ async function onSubmit() {
   loading.value = true
   try {
     await auth.login({ username: username.value, password: password.value })
-    applyGuard(recordSuccess(guard))
+    failRemain.value = null
     router.push({ name: 'screen' })
   } catch (e) {
-    applyGuard(recordFailure(guard, Date.now()))
-    if (lockRemainSec(guard, Date.now()) > 0) {
-      errorMsg.value = '连续失败 ' + LOCK_THRESHOLD + ' 次，账号已锁定 5 分钟'
+    if (e instanceof LoginError) {
+      if (e.remainSec > 0) {
+        lockUntil.value = Date.now() + e.remainSec * 1000
+        errorMsg.value = ''
+      } else {
+        failRemain.value = e.attemptsLeft ?? null
+        errorMsg.value = e.message + (failRemain.value !== null ? '（还可尝试 ' + failRemain.value + ' 次）' : '')
+      }
     } else {
-      errorMsg.value = (e instanceof Error ? e.message : '登录失败') + '（还可尝试 ' + failRemain.value + ' 次）'
+      errorMsg.value = e instanceof Error ? e.message : '登录失败'
     }
     drawCaptcha()
     captchaInput.value = ''
