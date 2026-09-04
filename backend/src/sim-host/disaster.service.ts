@@ -1,5 +1,6 @@
 import { Injectable, OnModuleInit } from '@nestjs/common'
 import {
+  buildReinforcement,
   createDisasterEvent,
   DISASTER_NAME,
   pickShelters,
@@ -187,6 +188,8 @@ export class DisasterService implements OnModuleInit {
       })
     }
     this.reinforced = true
+    // F1：增援段写入 plan，抢险调配单同步出现「增援组」
+    this.plan = { ...this.plan, reinforcement: buildReinforcement(SHELTERS, this.flood, !!this.plan.delivery) }
     const reinforceText = '指挥部：二次调配增援已执行，增援勘测机与投送架次已起飞'
     if (this.situation) {
       this.situation = {

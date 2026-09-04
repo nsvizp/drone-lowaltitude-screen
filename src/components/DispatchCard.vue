@@ -1,9 +1,30 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useDisaster } from '@/composables/useDisaster'
+import { useDrones } from '@/composables/useDrones'
+import { liveEta, liveSurveyRows } from '@/sim/live-dispatch'
 
-const { flood, plan } = useDisaster()
+const { flood, plan, evalResult, reinforced, executeReinforcement } = useDisaster()
+const { drones } = useDrones()
 
-function etaText(sec: number): string {
+/** 勘测组实时行：电量/距离/ETA 随机队 WS 快照每秒刷新 */
+const liveRows = computed(() => (plan.value ? liveSurveyRows(plan.value, drones.value) : []))
+
+/** 增援组实时行：按机名绑定机队遥测 */
+const reinforcementRows = computed(() => {
+  const r = plan.value?.reinforcement
+  const f = flood.value
+  if (!r || !f) return []
+  return r.drones.map((d) => {
+    const live = drones.value.find((x) => x.name === d.droneName)
+    if (!live) return { ...d, distanceKm: null as number | null, battery: null as number | null, etaSec: null as number | null, arrived: false }
+    const eta = liveEta(live, f.position)
+    return { ...d, distanceKm: eta.distanceKm, battery: live.batteryPct, etaSec: eta.etaSec, arrived: eta.arrived }
+  })
+})
+
+function etaText(sec: number, arrived?: boolean): string {
+  if (arrived) return '已到场'
   return sec < 90 ? sec + ' 秒' : '约 ' + Math.round(sec / 60) + ' 分钟'
 }
 </script>
@@ -19,10 +40,10 @@ function etaText(sec: number): string {
     </div>
 
     <div class="dispatch-card__group">
-      <div class="dispatch-card__group-title">勘测组（在飞改派）</div>
-      <div v-for="s in plan.survey" :key="s.droneId" class="dispatch-card__row">
-        <span class="dispatch-card__name">{{ s.droneName }}</span>
-        <span class="dispatch-card__dim">{{ s.distanceKm }}km · 电量 {{ s.battery }}% · ETA {{ etaText(s.etaSec) }}</span>
+      <div class="dispatch-card__group-title">勘测组（在飞改派 · 实时）</div>
+      <div v-for="s in liveRows" :key="s.droneId" class="dispatch-card__row">
+        <span class="dispatch-card__name">{{ s.droneName }}<template v-if="s.offline">（已归舱）</template></span>
+        <span class="dispatch-card__dim">{{ s.distanceKm }}km · 电量 {{ s.battery }}% · {{ etaText(s.etaSec, s.arrived) }}</span>
       </div>
       <div class="dispatch-card__dim dispatch-card__note">{{ plan.survey[0]?.flyerNote }}</div>
     </div>
@@ -42,6 +63,37 @@ function etaText(sec: number): string {
     </div>
 
     <div v-for="w in plan.warnings" :key="w" class="dispatch-card__warn">⚠ {{ w }}</div>
+
+    <!-- F1：二次调配增援组（执行后出现，实时遥测） -->
+    <div v-if="plan.reinforcement" class="dispatch-card__group dispatch-card__group--reinforce">
+      <div class="dispatch-card__group-title">增援组（二次调配 · {{ plan.reinforcement.shelterName }}起飞）</div>
+      <div v-for="r in reinforcementRows" :key="r.droneName" class="dispatch-card__row">
+        <span class="dispatch-card__name">{{ r.droneName }} · {{ r.task }}</span>
+        <span class="dispatch-card__dim">
+          <template v-if="r.distanceKm !== null">{{ r.distanceKm }}km · 电量 {{ r.battery }}% · {{ etaText(r.etaSec!, r.arrived) }}</template>
+          <template v-else>准备起飞…</template>
+        </span>
+      </div>
+    </div>
+
+    <!-- 增援评估与二次调配按钮（原现场态势卡迁入） -->
+    <div v-if="evalResult" class="dispatch-card__eval" :class="{ 'dispatch-card__eval--need': evalResult.needed }">
+      <div class="dispatch-card__eval-title">
+        {{ evalResult.needed ? '🔴 建议二次调配增援' : '🟢 暂不需要增援' }}
+      </div>
+      <ul v-if="evalResult.needed" class="dispatch-card__reasons">
+        <li v-for="r in evalResult.reasons" :key="r">· {{ r }}</li>
+      </ul>
+      <div class="dispatch-card__rec">{{ evalResult.recommendation }}</div>
+      <button
+        v-if="evalResult.needed"
+        class="dispatch-card__btn"
+        :disabled="reinforced"
+        @click="executeReinforcement"
+      >
+        {{ reinforced ? '✓ 增援已执行' : '执行增援' }}
+      </button>
+    </div>
   </div>
 </template>
 
@@ -100,5 +152,35 @@ function etaText(sec: number): string {
   &__note { margin-top: 3px; }
 
   &__warn { color: #ff9a6b; margin-top: 6px; }
+
+  &__group--reinforce { border-top-color: rgba(82, 196, 26, 0.4); }
+
+  &__eval {
+    margin-top: 8px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    background: rgba(82, 196, 26, 0.08);
+    border: 1px solid rgba(82, 196, 26, 0.3);
+
+    &--need { background: rgba(255, 59, 59, 0.12); border-color: rgba(255, 59, 59, 0.45); }
+  }
+
+  &__eval-title { font-size: 12px; font-weight: 600; color: #ffd666; }
+  &__reasons { margin: 4px 0; padding: 0; list-style: none; color: var(--text-dim); font-size: 11px; }
+  &__rec { font-size: 11px; color: var(--accent); margin-top: 3px; }
+
+  &__btn {
+    margin-top: 6px;
+    padding: 4px 14px;
+    font-size: 12px;
+    color: #fff;
+    background: rgba(255, 59, 59, 0.35);
+    border: 1px solid rgba(255, 59, 59, 0.6);
+    border-radius: 4px;
+    cursor: pointer;
+
+    &:hover:not(:disabled) { background: rgba(255, 59, 59, 0.55); }
+    &:disabled { opacity: 0.55; cursor: default; }
+  }
 }
 </style>

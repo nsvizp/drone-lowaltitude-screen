@@ -1,4 +1,5 @@
 import { computed, ref } from 'vue'
+import { authFetch } from '@/api/http'
 import { getSocket } from '@/api/socket'
 import type { DispatchPlan, FloodEvent } from '@/sim/disaster'
 import type { ReinforcementEval, SituationState, SituationSummary } from '@/sim/situation'
@@ -51,7 +52,7 @@ function connect(): void {
   connected = true
   getSocket().on('disaster', applySnapshot)
   // 兜底：socket 未通时拉一次 REST 快照
-  fetch('/api/disaster/state')
+  authFetch('/api/disaster/state')
     .then((r) => (r.ok ? r.json() : null))
     .then((s) => { if (s) applySnapshot(s) })
     .catch(() => undefined)
@@ -62,7 +63,7 @@ export function useDisaster() {
 
   /** 模拟灾情（服务端生成灾点并执行调配）：flood 洪灾 / debris 泥石流 */
   const simulateFlood = (type: 'flood' | 'debris' | 'fire' = 'flood') => {
-    void fetch('/api/disaster/simulate', {
+    void authFetch('/api/disaster/simulate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type }),
@@ -71,12 +72,12 @@ export function useDisaster() {
 
   /** 执行二次调配增援 */
   const executeReinforcement = () => {
-    void fetch('/api/disaster/reinforce', { method: 'POST' }).catch(() => undefined)
+    void authFetch('/api/disaster/reinforce', { method: 'POST' }).catch(() => undefined)
   }
 
   /** 结束演练（灾情解除，恢复初始态） */
   const resolveDisaster = () => {
-    void fetch('/api/disaster/resolve', { method: 'POST' }).catch(() => undefined)
+    void authFetch('/api/disaster/resolve', { method: 'POST' }).catch(() => undefined)
   }
 
   const openVideo = (droneId: string) => { videoDroneId.value = droneId }

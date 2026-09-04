@@ -1,5 +1,6 @@
 import { Body, Controller, Ip, Post, UnauthorizedException } from '@nestjs/common'
 import { AuthService } from './auth.service'
+import { Public } from './public.decorator'
 
 interface LoginBody {
   username?: string
@@ -10,6 +11,7 @@ interface LoginBody {
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
+  @Public()
   @Post('login')
   async login(@Body() body: LoginBody, @Ip() ip: string) {
     if (!body.username || !body.password) {

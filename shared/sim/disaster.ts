@@ -80,12 +80,37 @@ export interface DeliveryAssignment {
   etaMinutes: number
 }
 
+/** 二次调配增援段（执行增援后追加到 plan） */
+export interface ReinforcementAssignment {
+  /** 增援起飞方舱（次近方舱） */
+  shelterName: string
+  /** 增援机（名称与后端 launch 固定命名一致，前端按名绑定实时遥测） */
+  drones: { droneName: string; task: string }[]
+}
+
 export interface DispatchPlan {
   flood: FloodEvent
   survey: SurveyAssignment[]
   delivery: DeliveryAssignment | null
   /** 无法调配时的原因（如电量不足） */
   warnings: string[]
+  /** 二次调配增援段（执行后存在） */
+  reinforcement?: ReinforcementAssignment
+}
+
+/** 构造增援段：次近方舱起飞 R1 勘测，（有投送组时）R2 投送 */
+export function buildReinforcement(
+  shelters: ShelterInfo[],
+  flood: FloodEvent,
+  withDelivery: boolean,
+): ReinforcementAssignment {
+  const shelter = pickShelters(shelters, flood, 2)[1] ?? pickShelters(shelters, flood, 1)[0] ?? shelters[0]
+  return {
+    shelterName: shelter.name,
+    drones: withDelivery
+      ? [{ droneName: 'DJI-M350-R1', task: '增援勘测' }, { droneName: 'DJI-M350-R2', task: '增援投送' }]
+      : [{ droneName: 'DJI-M350-R1', task: '增援勘测' }],
+  }
 }
 
 /** 随机生成一处灾情（落在给定范围内，通常用无人机航线包围盒） */

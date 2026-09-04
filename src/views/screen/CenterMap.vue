@@ -7,10 +7,11 @@ import { pointAlongFlightPath, useFlightCases, type FlightCaseDetail } from '@/c
 import { mulberry32, SHANGHAI_CENTER, type DroneState } from '@/sim/drone-sim'
 import { createEmergencyData, type EmergencyCategory, type EmergencyPoint } from '@/sim/emergency-data'
 import { useDisaster } from '@/composables/useDisaster'
+import { authFetch } from '@/api/http'
 import { backendOnline } from '@/api/socket'
 import DispatchCard from '@/components/DispatchCard.vue'
-import SituationCard from '@/components/SituationCard.vue'
 import VideoFeed from '@/components/VideoFeed.vue'
+import AiAnalysisCard from '@/components/AiAnalysisCard.vue'
 
 declare global {
   interface Window {
@@ -47,7 +48,7 @@ const EMERGENCY_LAYERS: { key: EmergencyCategory; label: string; color: string; 
 
 /** 应急资源数据：人员/车辆为模拟（确定性 seed）；物资点异步替换为仓储台账（与投送航线同源） */
 const emergencyData = reactive(createEmergencyData(mulberry32(20260903)))
-fetch('/api/warehouses')
+authFetch('/api/warehouses')
   .then((r) => (r.ok ? r.json() : null))
   .then((rows) => {
     if (!Array.isArray(rows) || rows.length === 0) return
@@ -594,8 +595,8 @@ onBeforeUnmount(() => {
     </div>
 
     <DispatchCard />
-    <SituationCard />
     <VideoFeed />
+	<AiAnalysisCard/>
 
     <div class="center-map__themes">
       <button
