@@ -4,7 +4,7 @@ import { useDrones } from '@/composables/useDrones'
 import { useDisaster } from '@/composables/useDisaster'
 import { useDraggable, useResizable } from '@/composables/useDraggable'
 import { formatHudTelemetry, getVideoSource, signalBars } from '@/sim/video'
-import { pickSurveyVideo } from '@/sim/video-packs'
+import { pickPatrolVideo, pickSurveyVideo } from '@/sim/video-packs'
 
 const { drones } = useDrones()
 const disaster = useDisaster()
@@ -46,11 +46,24 @@ const scene = computed(() => {
  * 灾情勘测实况：勘测机在场时切换真实航拍视频。
  * 多架勘测机各看不同机位（按 droneId 散列选片）；执行增援后切换到包内下一片。
  */
+const liveMode = computed<'patrol' | 'disaster' | null>(() => {
+  const d = drone.value
+  const f = disaster.flood.value
+  if (!d) return null
+  if (pickPatrolVideo(Boolean(f), d.mission)) return 'patrol'
+  if (f && d.mission === 'survey') return 'disaster'
+  return null
+})
 const liveSrc = computed(() => {
   const d = drone.value
   const f = disaster.flood.value
-  if (!d || !f || d.mission !== 'survey') return null
-  return pickSurveyVideo(f.kind ?? 'flood', d.id, disaster.reinforced.value)
+  if (!d) return null
+  const patrolSrc = pickPatrolVideo(Boolean(f), d.mission)
+  if (patrolSrc) return patrolSrc
+  if (f && d.mission === 'survey') {
+    return pickSurveyVideo(f.kind ?? 'flood', d.id, disaster.reinforced.value)
+  }
+  return null
 })
 const disasterLabel = computed(() => {
   const k = disaster.flood.value?.kind
@@ -213,7 +226,12 @@ watch(videoDroneId, () => { frame = 0 })
       <div v-if="signalLost" class="video-feed__lost">📡 信号丢失 · 无人机已归舱</div>
     </div>
     <div class="video-feed__foot">
-      {{ liveSrc ? disasterLabel + ' 勘测实况（航拍图传）' : (scene === 'flood' ? '🌊 洪灾勘测画面（模拟图传）' : '🏙 巡逻画面（模拟图传）') }} · {{ drone.taskName }}
+      {{ liveMode === 'patrol'
+        ? '🏙 日常巡航实况（航拍图传）'
+        : liveMode === 'disaster'
+          ? disasterLabel + ' 勘测实况（航拍图传）'
+          : (scene === 'flood' ? '🌊 洪灾勘测画面（模拟图传）' : '🏙 巡逻画面（模拟图传）')
+      }} · {{ drone.taskName }}
     </div>
     <div ref="resizeGripRef" class="video-feed__resize" title="拖动调整大小" />
   </div>

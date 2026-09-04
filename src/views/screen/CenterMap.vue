@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, reactive, ref, watch, type DeepReadonly } from 'vue'
 import AMapLoader from '@amap/amap-jsapi-loader'
 import { loadPublicConfig } from '@/api/config'
 import { useDrones } from '@/composables/useDrones'
+import { pointAlongFlightPath, useFlightCases, type FlightCaseDetail } from '@/composables/useFlightCases'
 import { mulberry32, SHANGHAI_CENTER, type DroneState } from '@/sim/drone-sim'
 import { createEmergencyData, type EmergencyCategory, type EmergencyPoint } from '@/sim/emergency-data'
 import { useDisaster } from '@/composables/useDisaster'
@@ -27,6 +28,7 @@ const selected = ref<DroneState | null>(null)
 
 const { routes, drones, summary } = useDrones()
 const disaster = useDisaster()
+const { activeFlightCase, clearFlightCase } = useFlightCases()
 
 /** 方舱固定点位（演示数据） */
 const SHELTERS = [
@@ -83,6 +85,10 @@ const trackLines = new Map<string, any>()
 const plannedLines = new Map<string, any>()
 /** 洪灾覆盖物 */
 let floodOverlays: any[] = []
+/** 左侧飞行案例选中后的回放轨迹、起点和终点 */
+let flightCaseOverlays: any[] = []
+let flightCaseReplayTimer: ReturnType<typeof setInterval> | undefined
+const FLIGHT_CASE_REPLAY_MS = 6000
 
 let map: any = null
 let satelliteLayer: any = null
@@ -202,6 +208,72 @@ function toggleLayer(key: EmergencyCategory) {
   for (const m of layerMarkers[key]) visible ? m.show() : m.hide()
 }
 
+function clearFlightCaseOverlays(): void {
+  clearInterval(flightCaseReplayTimer)
+  flightCaseReplayTimer = undefined
+  if (map && flightCaseOverlays.length) map.remove(flightCaseOverlays)
+  flightCaseOverlays = []
+}
+
+/** 在地图上高亮历史案例轨迹，并将视野完整定位到起终点。 */
+function renderFlightCase(detail: DeepReadonly<FlightCaseDetail> | null): void {
+  if (!map || !window.AMap) return
+  clearFlightCaseOverlays()
+  if (!detail || detail.path.length < 2) return
+
+  const AMap = window.AMap
+  const start = detail.path[0]
+  const end = detail.path[detail.path.length - 1]
+  const line = new AMap.Polyline({
+    map,
+    path: detail.path,
+    strokeColor: '#00e5ff',
+    strokeWeight: 5,
+    strokeOpacity: 0.95,
+    lineJoin: 'round',
+    showDir: true,
+    zIndex: 90,
+  })
+  const startMarker = new AMap.Marker({
+    map,
+    position: start,
+    content: '<div class="flight-case-point flight-case-point--start"><b>起</b><span>任务起点</span></div>',
+    offset: new AMap.Pixel(-18, -18),
+    zIndex: 91,
+  })
+  const endMarker = new AMap.Marker({
+    map,
+    position: end,
+    content: '<div class="flight-case-point flight-case-point--end"><b>终</b><span>' + detail.destinationName + '</span></div>',
+    offset: new AMap.Pixel(-18, -18),
+    zIndex: 91,
+  })
+  const replayMarkers = detail.droneNames.map((name, index) => new AMap.Marker({
+    map,
+    position: start,
+    content:
+      '<div class="flight-case-replay" style="--delay:' + index * 90 + 'ms">' +
+      '<span>✈</span><b>' + name.replace('DJI-', '') + '</b></div>',
+    offset: new AMap.Pixel(-16, -16),
+    zIndex: 92 + index,
+  }))
+  flightCaseOverlays = [line, startMarker, endMarker, ...replayMarkers]
+  map.setFitView(flightCaseOverlays, false, [90, 90, 90, 190], 14)
+
+  // 历史案例采用快速回放，不改变服务端实时机队的飞行速度。
+  const startedAt = Date.now()
+  const updateReplay = () => {
+    const progress = ((Date.now() - startedAt) % FLIGHT_CASE_REPLAY_MS) / FLIGHT_CASE_REPLAY_MS
+    replayMarkers.forEach((marker, index) => {
+      const staggeredProgress = Math.max(0, progress - index * 0.025)
+      const position = pointAlongFlightPath(detail.path, staggeredProgress)
+      if (position) marker.setPosition(position)
+    })
+  }
+  updateReplay()
+  flightCaseReplayTimer = setInterval(updateReplay, 80)
+}
+
 /** 渲染应急资源图层（可重入：supplies 异步替换为仓储台账后重绘） */
 function renderEmergencyLayers() {
   if (!map || !window.AMap) return
@@ -279,6 +351,7 @@ async function initMap() {
     for (const d of drones.value) createDroneMarker(d)
 
     applyTheme(theme.value)
+    renderFlightCase(activeFlightCase.value)
   } catch (e) {
     mapError.value = '高德地图加载失败：' + (e instanceof Error ? e.message : String(e))
   }
@@ -407,6 +480,8 @@ watch(disaster.flood, (f) => {
   map.panTo(f.position)
 })
 
+watch(activeFlightCase, (detail) => renderFlightCase(detail))
+
 // InfoWindow 内「观看实时视频」按钮（事件委托）
 function onVideoBtnClick(e: MouseEvent) {
   const btn = (e.target as HTMLElement).closest('.js-video-btn') as HTMLElement | null
@@ -424,6 +499,7 @@ onBeforeUnmount(() => {
   layerMarkers.supplies = []
   layerMarkers.personnel = []
   layerMarkers.vehicles = []
+  clearFlightCaseOverlays()
   map?.destroy()
   map = null
 })
@@ -444,6 +520,17 @@ onBeforeUnmount(() => {
       <span class="center-map__chip center-map__chip--fly">飞行中 {{ summary.flying }}</span>
       <span class="center-map__chip center-map__chip--return">返航 {{ summary.returning }}</span>
       <span class="center-map__chip center-map__chip--warn">低电量 {{ summary.lowBattery }}</span>
+    </div>
+
+    <div v-if="activeFlightCase" class="center-map__case" aria-live="polite">
+      <div class="center-map__case-kicker">快速轨迹回放 · 6秒/轮 · #{{ activeFlightCase.flyRecordId }}</div>
+      <div class="center-map__case-route">
+        <strong>{{ activeFlightCase.droneCount }}架无人机</strong>
+        <span>飞往</span>
+        <em>{{ activeFlightCase.destinationName }}</em>
+      </div>
+      <div class="center-map__case-drones">{{ activeFlightCase.droneNames.join(' · ') }}</div>
+      <button type="button" aria-label="关闭飞行轨迹回放" @click="clearFlightCase">×</button>
     </div>
 
     <div class="center-map__layers">
@@ -583,6 +670,74 @@ onBeforeUnmount(() => {
     &--fly { color: var(--accent); }
     &--return { color: #a66bff; }
     &--warn { color: var(--warn); }
+  }
+
+  &__case {
+    position: absolute;
+    z-index: 12;
+    top: 12px;
+    left: 50%;
+    width: 360px;
+    padding: 9px 38px 9px 12px;
+    background: linear-gradient(100deg, rgba(4, 25, 51, 0.96), rgba(7, 47, 78, 0.94));
+    border: 1px solid rgba(0, 229, 255, 0.72);
+    border-radius: 5px;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.16), inset 3px 0 0 #00e5ff;
+    transform: translateX(-50%);
+
+    &-kicker {
+      color: #7fa9d7;
+      font-family: var(--font-num);
+      font-size: 10px;
+      letter-spacing: 1px;
+    }
+
+    &-route {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      margin-top: 3px;
+      white-space: nowrap;
+
+      strong { color: #00e5ff; font-size: 14px; }
+      span { color: #8eadd3; font-size: 11px; }
+      em {
+        overflow: hidden;
+        color: #ffd666;
+        font-size: 13px;
+        font-style: normal;
+        font-weight: 700;
+        text-overflow: ellipsis;
+      }
+    }
+
+    &-drones {
+      overflow: hidden;
+      margin-top: 3px;
+      color: #9db8da;
+      font-family: var(--font-num);
+      font-size: 10px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    > button {
+      position: absolute;
+      top: 7px;
+      right: 8px;
+      width: 24px;
+      height: 24px;
+      color: #8fb8e3;
+      font-size: 18px;
+      line-height: 20px;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 3px;
+      cursor: pointer;
+
+      &:hover { color: #fff; border-color: rgba(86, 204, 242, 0.5); }
+      &:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    }
   }
 
   &__layers {
@@ -825,5 +980,80 @@ onBeforeUnmount(() => {
   padding: 1px 6px;
   border-radius: 3px;
   white-space: nowrap;
+}
+
+.flight-case-point {
+  position: relative;
+  display: flex;
+  align-items: center;
+  filter: drop-shadow(0 0 8px rgba(0, 229, 255, 0.75));
+}
+
+.flight-case-point b {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  color: #04203d;
+  font-size: 13px;
+  background: #00e5ff;
+  border: 2px solid #dffcff;
+  border-radius: 50%;
+}
+
+.flight-case-point span {
+  margin-left: 5px;
+  padding: 3px 7px;
+  color: #dffcff;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  background: rgba(4, 25, 51, 0.92);
+  border: 1px solid rgba(0, 229, 255, 0.6);
+  border-radius: 3px;
+}
+
+.flight-case-point--end {
+  filter: drop-shadow(0 0 8px rgba(255, 214, 102, 0.75));
+}
+
+.flight-case-point--end b {
+  color: #352800;
+  background: #ffd666;
+  border-color: #fff4c7;
+}
+
+.flight-case-point--end span { border-color: rgba(255, 214, 102, 0.7); }
+
+.flight-case-replay {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  filter: drop-shadow(0 0 7px #00e5ff);
+  animation: flight-case-replay-pulse 0.8s ease-in-out infinite alternate;
+  animation-delay: var(--delay);
+}
+
+.flight-case-replay span {
+  color: #fff;
+  font-size: 23px;
+  line-height: 1;
+  transform: rotate(42deg);
+}
+
+.flight-case-replay b {
+  padding: 2px 5px;
+  color: #bffaff;
+  font-family: Consolas, monospace;
+  font-size: 9px;
+  white-space: nowrap;
+  background: rgba(4, 25, 51, 0.88);
+  border: 1px solid rgba(0, 229, 255, 0.55);
+  border-radius: 3px;
+}
+
+@keyframes flight-case-replay-pulse {
+  from { opacity: 0.72; }
+  to { opacity: 1; }
 }
 </style>

@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { pickSurveyVideo, VIDEO_PACKS } from './video-packs'
+import { PATROL_VIDEO, pickPatrolVideo, pickSurveyVideo, VIDEO_PACKS } from './video-packs'
 
 describe('pickSurveyVideo 勘测实况选片', () => {
+  it('日常巡航视频使用独立资源路径', () => {
+    expect(PATROL_VIDEO).toBe('/videos/patrol/daily-inspection.mp4')
+    expect(pickPatrolVideo(false, 'patrol')).toBe(PATROL_VIDEO)
+    expect(pickPatrolVideo(true, 'patrol')).toBeNull()
+    expect(pickPatrolVideo(false, 'survey')).toBeNull()
+  })
+
   it('同一架机选片稳定', () => {
     expect(pickSurveyVideo('flood', 'drone-1', false)).toBe(pickSurveyVideo('flood', 'drone-1', false))
   })

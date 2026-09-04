@@ -1,4 +1,13 @@
 import type { DisasterKind } from './disaster'
+import type { Mission } from './drone-sim'
+
+/** 无应急事件时，日常巡航无人机统一使用的航拍实况。 */
+export const PATROL_VIDEO = '/videos/patrol/daily-inspection.mp4'
+
+/** 仅在无应急事件且无人机执行日常巡航时播放巡航实况。 */
+export function pickPatrolVideo(disasterActive: boolean, mission: Mission): string | null {
+  return !disasterActive && mission === 'patrol' ? PATROL_VIDEO : null
+}
 
 /** 各灾种的勘测实况视频包（public/videos/<kind>/ 下） */
 export const VIDEO_PACKS: Record<DisasterKind, string[]> = {

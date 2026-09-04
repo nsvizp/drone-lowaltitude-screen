@@ -4,6 +4,7 @@ import PanelCard from '@/components/PanelCard.vue'
 import { openAssociatedFlyRecord, openFlyers } from '@/api'
 import type { FlyRecord } from '@/api/types'
 import { useDrones } from '@/composables/useDrones'
+import { getFlightCaseDetail, useFlightCases } from '@/composables/useFlightCases'
 import {
   LOW_BATTERY_PERCENT,
   type DroneState,
@@ -23,6 +24,7 @@ const FALLBACK_FLYERS: FlyerRow[] = [
 ]
 
 const { drones } = useDrones()
+const { activeFlightCase, showFlightCase, clearFlightCase } = useFlightCases()
 const cases = ref<FlyRecord[]>([])
 const caseTotal = ref(0)
 const expanded = ref(false)
@@ -49,7 +51,18 @@ onMounted(async () => {
   flyers.value = flyerRows
 })
 
-const visibleCases = () => (expanded.value ? cases.value : cases.value.slice(0, 6))
+const visibleCases = computed(() => {
+  const rows = expanded.value ? cases.value : cases.value.slice(0, 6)
+  return rows.map((record) => ({ record, detail: getFlightCaseDetail(record) }))
+})
+
+function toggleFlightCase(detail: ReturnType<typeof getFlightCaseDetail>): void {
+  if (activeFlightCase.value?.flyRecordId === detail.flyRecordId) {
+    clearFlightCase()
+    return
+  }
+  showFlightCase(detail)
+}
 
 function droneStatusLabel(drone: DroneState): string {
   if (drone.status === 'returning') return '返航'
@@ -136,20 +149,35 @@ function droneStatusTone(drone: DroneState): string {
     </PanelCard>
 
     <PanelCard title="飞行案例" class="left-panel__cases">
-      <ul class="cases">
-        <li v-for="(c, i) in visibleCases()" :key="c.flyRecordId" class="cases__item">
-          <span class="cases__rank" :class="{ 'cases__rank--top': i < 3 }">{{ i + 1 }}</span>
-          <div class="cases__info">
-            <div class="cases__row">
-              <span class="cases__name">{{ c.flyRecordName }}</span>
-              <span class="cases__status">执行中</span>
+      <ul class="cases" aria-label="飞行案例轨迹列表">
+        <li v-for="({ record, detail }, i) in visibleCases" :key="record.flyRecordId">
+          <button
+            type="button"
+            class="cases__item"
+            :class="{ 'is-active': activeFlightCase?.flyRecordId === record.flyRecordId }"
+            :aria-pressed="activeFlightCase?.flyRecordId === record.flyRecordId"
+            @click="toggleFlightCase(detail)"
+          >
+            <span class="cases__rank" :class="{ 'cases__rank--top': i < 3 }">{{ i + 1 }}</span>
+            <div class="cases__info">
+              <div class="cases__row">
+                <span class="cases__name">{{ record.flyRecordName }}</span>
+                <span class="cases__status">
+                  {{ activeFlightCase?.flyRecordId === record.flyRecordId ? '回放中' : '查看轨迹' }}
+                </span>
+              </div>
+              <div class="cases__mission">
+                <strong>{{ detail.droneCount }}架无人机</strong>
+                <span>从 {{ record.shelterName }} 飞往</span>
+                <em>{{ detail.destinationName }}</em>
+              </div>
+              <div class="cases__sub">{{ detail.droneNames.join('、') }}</div>
+              <div class="cases__meta">
+                <span>任务编号：{{ record.flyRecordId }}</span>
+                <span>{{ record.createTime }}</span>
+              </div>
             </div>
-            <div class="cases__sub">{{ c.flyLineName }} · {{ c.shelterName }}</div>
-            <div class="cases__meta">
-              <span>任务编号：{{ c.flyRecordId }}</span>
-              <span>{{ c.createTime }}</span>
-            </div>
-          </div>
+          </button>
         </li>
       </ul>
       <button class="cases__more" @click="expanded = !expanded">
@@ -400,12 +428,34 @@ function droneStatusTone(drone: DroneState): string {
   gap: 8px;
 
   &__item {
+    width: 100%;
     display: flex;
     gap: 10px;
     padding: 10px;
+    color: inherit;
+    font-family: inherit;
+    text-align: left;
     background: rgba(6, 24, 48, 0.6);
     border: 1px solid rgba(47, 128, 237, 0.2);
     border-radius: 4px;
+    cursor: pointer;
+    transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+
+    &:hover {
+      background: rgba(10, 42, 78, 0.76);
+      border-color: rgba(86, 204, 242, 0.55);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    &.is-active {
+      background: linear-gradient(90deg, rgba(47, 128, 237, 0.2), rgba(0, 229, 255, 0.08));
+      border-color: #56ccf2;
+      box-shadow: inset 3px 0 0 #00e5ff, 0 0 14px rgba(0, 229, 255, 0.12);
+    }
   }
 
   &__rank {
@@ -453,9 +503,37 @@ function droneStatusTone(drone: DroneState): string {
   }
 
   &__sub {
-    margin-top: 3px;
-    font-size: 12px;
+    overflow: hidden;
+    margin-top: 4px;
+    font-family: var(--font-num);
+    font-size: 10px;
     color: var(--text-dim);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__mission {
+    display: flex;
+    align-items: baseline;
+    gap: 5px;
+    margin-top: 5px;
+    font-size: 11px;
+    color: #8eadd3;
+
+    strong {
+      flex: 0 0 auto;
+      color: #00e5ff;
+      font-size: 12px;
+    }
+
+    em {
+      overflow: hidden;
+      color: #ffd666;
+      font-style: normal;
+      font-weight: 600;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
   }
 
   &__meta {
