@@ -25,7 +25,7 @@ function onLogout() {
       <span class="topbar__weather">☁ {{ weather.temperature }}°C</span>
     </div>
 
-    <h1 class="topbar__title">无人机低空指挥调度平台</h1>
+    <h1 class="topbar__title">应急指挥调度平台</h1>
 
     <div class="topbar__right">
       <button class="topbar__home" @click="onLogout">🔔 首页</button>

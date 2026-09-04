@@ -79,7 +79,7 @@ onMounted(drawCaptcha)
 <template>
   <div class="login">
     <div class="login__card">
-      <h1 class="login__title">无人机低空指挥调度平台</h1>
+      <h1 class="login__title">应急指挥调度平台</h1>
       <p class="login__subtitle">Low-Altitude UAV Command &amp; Dispatch Platform</p>
       <form class="login__form" @submit.prevent="onSubmit">
         <label class="login__field">

@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import * as echarts from 'echarts'
+import { computed, onMounted, ref, watch } from 'vue'
 import PanelCard from '@/components/PanelCard.vue'
-import { openNewTotalDataByDay, openTaskOverview } from '@/api'
+import { openTaskOverview } from '@/api'
 import { PERIOD_LABELS } from '@/api/period'
-import type { FlightStat, Period, TaskOverview, TaskStatus } from '@/api/types'
+import type { Period, TaskOverview, TaskStatus } from '@/api/types'
+import { useEventLog, type FeedKind } from '@/composables/event-log'
 
 // ---------- 飞行任务排行榜 ----------
 const periods: Period[] = ['today', 'week', 'month', 'year', 'total']
@@ -19,7 +19,7 @@ const STATUS_META: { key: TaskStatus; label: string; numKey: keyof TaskOverview;
   { key: 'completed', label: '已结单', numKey: 'completedNum', pctKey: 'completedPercent', color: '#a66bff' },
 ]
 
-// B7：请求序号——快速切换周期时只采纳最后一次响应，防止旧数据覆盖
+// 请求序号——快速切换周期时只采纳最后一次响应，防止旧数据覆盖
 let taskReqSeq = 0
 async function loadTask() {
   const seq = ++taskReqSeq
@@ -40,67 +40,18 @@ const orgBars = computed(() => {
 
 const activeMeta = computed(() => STATUS_META.find((m) => m.key === activeStatus.value)!)
 
-// ---------- 飞行统计分析 ----------
-const stats = ref<FlightStat | null>(null)
-const metric = ref<'recordCount' | 'flightLength' | 'durationHours'>('recordCount')
-const METRIC_LABELS = { recordCount: '飞行架次', flightLength: '飞行里程', durationHours: '飞行时长' } as const
-const METRIC_UNITS = { recordCount: '次', flightLength: 'km', durationHours: 'h' } as const
-const chartRef = ref<HTMLDivElement | null>(null)
-let chart: echarts.ECharts | null = null
+// ---------- 事件实时动态 + 节点记录 ----------
+const { feedEvents, nodeRecords } = useEventLog()
 
-function renderChart() {
-  if (!chartRef.value || !stats.value) return
-  if (!chart) chart = echarts.init(chartRef.value)
-  const orgs = stats.value.countViewRespVos ?? []
-  const names = orgs.map((o) => o.deptName)
-  const values = orgs.map((o) => Number(o[metric.value]))
-  chart.setOption({
-    grid: { left: 8, right: 40, top: 10, bottom: 0, containLabel: true },
-    xAxis: {
-      type: 'value',
-      splitLine: { lineStyle: { color: 'rgba(47,128,237,0.12)' } },
-      axisLabel: { color: '#7d9bc4', fontSize: 10 },
-    },
-    yAxis: {
-      type: 'category',
-      inverse: true,
-      data: names,
-      axisLine: { show: false },
-      axisTick: { show: false },
-      axisLabel: { color: '#d8e6ff', fontSize: 12 },
-    },
-    series: [
-      {
-        type: 'bar',
-        data: values,
-        barWidth: 12,
-        label: { show: true, position: 'right', color: '#00e5ff', fontSize: 11, fontFamily: 'DIN Alternate, sans-serif' },
-        itemStyle: {
-          borderRadius: [0, 6, 6, 0],
-          color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
-            { offset: 0, color: '#2f80ed' },
-            { offset: 1, color: '#00e5ff' },
-          ]),
-        },
-      },
-    ],
-  })
+const KIND_ICON: Record<FeedKind, string> = {
+  system: '⚙️',
+  drone: '🛩',
+  disaster: '🚨',
+  supply: '📦',
+  field: '📡',
 }
-watch([metric, stats], renderChart)
 
-const resizeHandler = () => chart?.resize()
-
-onMounted(async () => {
-  await loadTask()
-  const res = await openNewTotalDataByDay()
-  stats.value = res.data
-  renderChart()
-  window.addEventListener('resize', resizeHandler)
-})
-onBeforeUnmount(() => {
-  window.removeEventListener('resize', resizeHandler)
-  chart?.dispose()
-})
+onMounted(loadTask)
 </script>
 
 <template>
@@ -147,20 +98,31 @@ onBeforeUnmount(() => {
       </ul>
     </PanelCard>
 
-    <PanelCard title="飞行统计分析" class="right-panel__stats">
-      <div class="stats__tabs">
-        <button
-          v-for="(label, key) in METRIC_LABELS"
-          :key="key"
-          class="stats__tab"
-          :class="{ 'stats__tab--active': metric === key }"
-          @click="metric = key"
-        >
-          {{ label }}
-        </button>
-        <span class="stats__unit">单位：{{ METRIC_UNITS[metric] }}</span>
+    <PanelCard title="事件实时动态" class="right-panel__feed">
+      <div class="feed">
+        <ul class="feed__list">
+          <li v-for="e in [...feedEvents].reverse()" :key="e.seq" class="feed__item">
+            <span class="feed__time">{{ e.time }}</span>
+            <span class="feed__icon">{{ KIND_ICON[e.kind] }}</span>
+            <span class="feed__text">{{ e.text }}</span>
+          </li>
+          <li v-if="feedEvents.length === 0" class="feed__empty">暂无事件，系统运行中…</li>
+        </ul>
+
+        <div class="nodes">
+          <div class="nodes__header">节点记录</div>
+          <ul class="nodes__list">
+            <li v-for="n in [...nodeRecords].reverse()" :key="n.seq" class="nodes__item">
+              <div class="nodes__head">
+                <span class="nodes__title">{{ n.title }}</span>
+                <span class="nodes__time">{{ n.time }}</span>
+              </div>
+              <div class="nodes__detail">{{ n.detail }}</div>
+            </li>
+            <li v-if="nodeRecords.length === 0" class="feed__empty">灾情发生时自动生成节点</li>
+          </ul>
+        </div>
       </div>
-      <div ref="chartRef" class="stats__chart" />
     </PanelCard>
   </aside>
 </template>
@@ -172,7 +134,7 @@ onBeforeUnmount(() => {
   gap: 16px;
 
   &__task { flex: 1.2; min-height: 0; }
-  &__stats { flex: 1; min-height: 0; }
+  &__feed { flex: 1; min-height: 0; }
 }
 
 .task {
@@ -274,39 +236,94 @@ onBeforeUnmount(() => {
   }
 }
 
-.stats {
-  &__tabs {
+.feed {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  gap: 8px;
+
+  &__list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    list-style: none;
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  &__item {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-main);
+  }
+
+  &__time {
+    font-family: var(--font-num);
+    color: var(--text-dim);
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+
+  &__icon { flex-shrink: 0; font-size: 11px; }
+
+  &__empty { color: var(--text-dim); font-size: 12px; padding: 6px 0; }
+}
+
+.nodes {
+  flex: 0 0 38%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px dashed rgba(47, 128, 237, 0.3);
+  padding-top: 6px;
+
+  &__header {
+    font-size: 13px;
+    font-weight: 600;
+    color: #ffd666;
+    margin-bottom: 4px;
+  }
+
+  &__list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  &__item {
+    border-left: 2px solid rgba(255, 214, 102, 0.5);
+    padding-left: 8px;
+  }
+
+  &__head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
     gap: 8px;
   }
 
-  &__tab {
-    padding: 5px 12px;
-    font-size: 12px;
-    color: var(--text-main);
-    background: rgba(6, 24, 48, 0.7);
-    border: 1px solid rgba(47, 128, 237, 0.3);
-    border-radius: 4px;
-    cursor: pointer;
+  &__title { font-size: 12px; font-weight: 600; color: #eaf3ff; }
 
-    &--active {
-      background: linear-gradient(90deg, var(--primary), var(--primary-light));
-      color: #fff;
-      border-color: transparent;
-    }
-  }
-
-  &__unit {
-    margin-left: auto;
+  &__time {
+    font-family: var(--font-num);
     font-size: 11px;
     color: var(--text-dim);
+    flex-shrink: 0;
   }
 
-  &__chart {
-    margin-top: 8px;
-    height: calc(100% - 40px);
-    min-height: 180px;
+  &__detail {
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.5;
   }
 }
 </style>

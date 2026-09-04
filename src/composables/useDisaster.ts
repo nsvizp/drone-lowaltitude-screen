@@ -25,6 +25,9 @@ import { createEmergencyData } from '@/sim/emergency-data'
 /** 洪灾演练区域（市区核心，保证应急响应在 1~2 分钟内到场） */
 const FLOOD_AREA = { minLng: 121.42, maxLng: 121.62, minLat: 31.16, maxLat: 31.26 }
 import { onFleetTick, useDrones } from './useDrones'
+import { pushFeed, pushNode } from './event-log'
+
+const SEVERITY_TEXT: Record<number, string> = { 1: 'Ⅰ 级', 2: 'Ⅱ 级', 3: 'Ⅲ 级' }
 
 /** 方舱（含备用机编制）与飞手名册（源自 mock 接口数据） */
 export const SHELTERS: ShelterInfo[] = [
@@ -57,6 +60,7 @@ const videoDroneId = ref<string | null>(null)
 
 let prevLegs = new Map<string, number>()
 const recordedDrops = new Set<string>()
+let surveyArrivedAnnounced = false
 let hookRegistered = false
 
 function refreshEval(fleet: FleetState): void {
@@ -73,9 +77,18 @@ function onTick(fleet: FleetState): void {
 
   // 现场观测：有盘旋勘测机才产生事件流
   const surveyor = fleet.drones.find((d) => d.mission === 'survey' && d.status === 'hovering')
+  // 勘测机到场节点（首次进入盘旋）
+  if (surveyor && !surveyArrivedAnnounced) {
+    surveyArrivedAnnounced = true
+    pushNode('勘测机到场', surveyor.name + ' 等开始盘旋勘测')
+  }
   if (surveyor && fleet.tickCount % ASSESS_INTERVAL_TICKS === 0) {
     const rng = mulberry32(fleet.tickCount * 7919)
+    const before = situation.value.events.length
     situation.value = assessSituation(situation.value, rng, fleet.tickCount, surveyor.name)
+    // 镜像新增的现场观测到全局事件动态
+    const events = situation.value.events
+    if (events.length > before) pushFeed('field', events[events.length - 1].text)
   }
 
   // 投送登记：越过灾点那一刻即空投完成（不等返程归舱）
@@ -88,15 +101,18 @@ function onTick(fleet: FleetState): void {
       .map((id) => fleet.drones.find((d) => d.id === id)?.name ?? id)
       .join('、')
     situation.value = recordDelivery(situation.value, newDrops.length * PACKS_PER_SORTIE)
+    const dropText = '投送组：' + names + ' 已在灾点上空空投（+' + newDrops.length * PACKS_PER_SORTIE + ' 件），正在返航'
     situation.value = {
       ...situation.value,
       events: [...situation.value.events, {
         seq: situation.value.events.length + 1,
         tick: fleet.tickCount,
         kind: 'supply' as const,
-        text: '投送组：' + names + ' 已在灾点上空空投（+' + newDrops.length * PACKS_PER_SORTIE + ' 件），正在返航',
+        text: dropText,
       }].slice(-30),
     }
+    pushFeed('supply', dropText)
+    pushNode('空投完成', names + ' · 累计 ' + situation.value.deliveredPacks + ' 件物资')
   }
 
   refreshEval(fleet)
@@ -144,6 +160,12 @@ export function useDisaster() {
     reinforced.value = false
     prevLegs = new Map()
     recordedDrops.clear()
+    surveyArrivedAnnounced = false
+
+    // 事件日志：灾情节点 + 初次调配节点 + 报警动态
+    pushNode('⚠ 灾情发生', SEVERITY_TEXT[floodEvent.severity] + '洪灾 · ' + floodEvent.position[0].toFixed(4) + ', ' + floodEvent.position[1].toFixed(4))
+    pushNode('初次调配下达', dispatchPlan.survey.length + ' 架勘测机改派 · ' + (dispatchPlan.delivery ? dispatchPlan.delivery.shelterName + ' ' + dispatchPlan.delivery.droneCount + ' 架投送 ' + dispatchPlan.delivery.droneCount * PACKS_PER_SORTIE + ' 件物资' : '无投送'))
+    pushFeed('disaster', SEVERITY_TEXT[floodEvent.severity] + '洪灾报警，抢险勘测与物资投送启动')
   }
 
   /** 执行二次调配增援：增派勘测机 + 追加投送架次 */
@@ -179,6 +201,8 @@ export function useDisaster() {
         }].slice(-30),
       }
     }
+    pushFeed('disaster', '二次调配增援已执行，增援机已起飞')
+    pushNode('二次增援执行', shelter.name + ' 起飞增援勘测/投送')
   }
 
   const openVideo = (droneId: string) => { videoDroneId.value = droneId }
