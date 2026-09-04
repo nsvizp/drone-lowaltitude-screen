@@ -4,7 +4,10 @@ import PanelCard from '@/components/PanelCard.vue'
 import { openAssociatedFlyRecord, openFlyers } from '@/api'
 import type { FlyRecord } from '@/api/types'
 import { useDrones } from '@/composables/useDrones'
-import type { DroneState } from '@/sim/drone-sim'
+import {
+  LOW_BATTERY_PERCENT,
+  type DroneState,
+} from '@/sim/drone-sim'
 
 interface FlyerRow {
   id: number
@@ -27,9 +30,13 @@ const activeResource = ref<'drones' | 'operators'>('drones')
 const flyers = ref<FlyerRow[]>([])
 
 const availableDrones = computed(() => drones.value.filter((drone) =>
-  drone.status !== 'docked' && drone.status !== 'returning' && drone.battery > 20,
+  drone.status !== 'docked' &&
+  drone.status !== 'returning' &&
+  drone.batteryPct > LOW_BATTERY_PERCENT,
 ).length)
-const lowBatteryDrones = computed(() => drones.value.filter((drone) => drone.battery <= 20).length)
+const lowBatteryDrones = computed(() => drones.value.filter((drone) =>
+  drone.status !== 'docked' && drone.batteryPct <= LOW_BATTERY_PERCENT,
+).length)
 const availableFlyers = computed(() => Math.max(0, flyers.value.length - 1))
 
 onMounted(async () => {
@@ -53,7 +60,8 @@ function droneStatusLabel(drone: DroneState): string {
 }
 
 function droneStatusTone(drone: DroneState): string {
-  if (drone.battery <= 20) return 'danger'
+  if (drone.batteryState === 'critical') return 'danger'
+  if (drone.batteryState === 'low') return 'warning'
   if (drone.status === 'returning') return 'warning'
   if (drone.status === 'docked') return 'muted'
   return 'active'
@@ -106,7 +114,9 @@ function droneStatusTone(drone: DroneState): string {
               <span class="state-chip" :class="'state-chip--' + droneStatusTone(drone)">
                 {{ droneStatusLabel(drone) }}
               </span>
-              <strong :class="{ 'is-low': drone.battery <= 20 }">{{ Math.round(drone.battery) }}%</strong>
+              <strong :class="{ 'is-low': drone.batteryPct <= LOW_BATTERY_PERCENT }">
+                {{ drone.batteryPct.toFixed(1) }}%
+              </strong>
             </div>
           </article>
           <div v-if="drones.length === 0" class="resource-empty">正在接收机队遥测...</div>

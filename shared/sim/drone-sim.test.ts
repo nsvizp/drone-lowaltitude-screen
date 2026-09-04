@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  AUTO_RETURN_PERCENT,
   advanceFleet,
   bearingDegrees,
   createFleet,
@@ -63,7 +64,7 @@ describe('机队模拟', () => {
     for (const d of fleet.drones) {
       expect(d.progress).toBeGreaterThanOrEqual(0)
       expect(d.progress).toBeLessThanOrEqual(0.5)
-      expect(d.battery).toBeGreaterThanOrEqual(60)
+      expect(d.batteryPct).toBeGreaterThanOrEqual(60)
       expect(d.status).toBe('flying')
     }
   })
@@ -74,9 +75,33 @@ describe('机队模拟', () => {
     for (const d of fleet.drones) {
       expect(d.progress).toBeGreaterThanOrEqual(0)
       expect(d.progress).toBeLessThanOrEqual(1)
-      expect(d.battery).toBeLessThanOrEqual(100)
+      expect(d.batteryPct).toBeLessThanOrEqual(100)
     }
     expect(fleet.tickCount).toBe(1)
+  })
+
+  it('每次遥测推进都会降低电量并更新时间与序号', () => {
+    let fleet = createFleet(routes, 1, mulberry32(71))
+    fleet = {
+      ...fleet,
+      drones: [{ ...fleet.drones[0], batteryPct: 100 }],
+    }
+    fleet = advanceFleet(fleet, routes, 3000, 1_725_000_000_000)
+    expect(fleet.drones[0].batteryPct).toBe(99.988)
+    expect(fleet.drones[0].telemetrySeq).toBe(1)
+    expect(fleet.drones[0].telemetryAt).toBe(1_725_000_000_000)
+  })
+
+  it('电量达到统一阈值时自动返航并记录低电原因', () => {
+    let fleet = createFleet(routes, 1, mulberry32(72))
+    fleet = {
+      ...fleet,
+      drones: [{ ...fleet.drones[0], batteryPct: AUTO_RETURN_PERCENT + 0.001 }],
+    }
+    fleet = advanceFleet(fleet, routes, 1000, 1_725_000_001_000)
+    expect(fleet.drones[0].status).toBe('returning')
+    expect(fleet.drones[0].returnReason).toBe('low_battery')
+    expect(fleet.drones[0].batteryState).toBe('low')
   })
 
   it('推进足够时间后无人机到达终点并返航', () => {
@@ -90,7 +115,7 @@ describe('机队模拟', () => {
     for (let i = 0; i < 300; i++) fleet = advanceFleet(fleet, routes, 5000)
     const drone = fleet.drones[0]
     expect(['flying', 'returning']).toContain(drone.status)
-    expect(drone.battery).toBeGreaterThan(0)
+    expect(drone.batteryPct).toBeGreaterThan(0)
   })
 
   it('fleetSummary 汇总飞行/返航/低电量数量', () => {

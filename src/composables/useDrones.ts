@@ -15,6 +15,7 @@ import {
 const routes = ref<DroneRoute[]>(createShanghaiRoutes())
 const drones = ref<DroneState[]>([])
 const summary = ref({ flying: 0, returning: 0, lowBattery: 0 })
+const lastTelemetryAt = ref(0)
 
 type TickHook = (state: FleetState) => void
 const tickHooks: TickHook[] = []
@@ -30,6 +31,10 @@ function connect(): void {
   if (connected) return
   connected = true
   getSocket().on('fleet', (fleet: FleetState) => {
+    const incomingAt = fleet.drones.reduce((latest, drone) => Math.max(latest, drone.telemetryAt), 0)
+    // 网络抖动或重连时丢弃旧快照，避免电量和状态在界面上倒退
+    if (incomingAt > 0 && incomingAt < lastTelemetryAt.value) return
+    lastTelemetryAt.value = incomingAt
     drones.value = fleet.drones
     summary.value = fleetSummary(fleet)
     // 调试/验收钩子（Playwright 探针用）
@@ -40,5 +45,5 @@ function connect(): void {
 
 export function useDrones() {
   connect()
-  return { routes, drones, summary }
+  return { routes, drones, summary, lastTelemetryAt }
 }

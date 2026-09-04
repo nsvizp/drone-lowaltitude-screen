@@ -33,10 +33,10 @@ describe('signalBars', () => {
   it('按电量分档', () => {
     const fleet = createFleet(routes, 1, mulberry32(1))
     const d = fleet.drones[0]
-    expect(signalBars({ ...d, battery: 90 })).toBe(5)
-    expect(signalBars({ ...d, battery: 70 })).toBe(4)
-    expect(signalBars({ ...d, battery: 45 })).toBe(3)
-    expect(signalBars({ ...d, battery: 26 })).toBe(2)
-    expect(signalBars({ ...d, battery: 10 })).toBe(1)
+    expect(signalBars({ ...d, batteryPct: 90 })).toBe(5)
+    expect(signalBars({ ...d, batteryPct: 70 })).toBe(4)
+    expect(signalBars({ ...d, batteryPct: 45 })).toBe(3)
+    expect(signalBars({ ...d, batteryPct: 26 })).toBe(2)
+    expect(signalBars({ ...d, batteryPct: 10 })).toBe(1)
   })
 })

@@ -12,6 +12,12 @@ export type DroneStatus = 'flying' | 'hovering' | 'returning' | 'docked'
 /** 任务类型：巡逻 / 抢险勘测 / 物资投送 */
 export type Mission = 'patrol' | 'survey' | 'delivery'
 
+/** 电池状态：正常 / 低电 / 严重低电 / 充电中 / 已充满 */
+export type BatteryState = 'normal' | 'low' | 'critical' | 'charging' | 'full'
+
+/** 返航原因：低电 / 航线完成 / 任务完成 / 人工召回 */
+export type ReturnReason = 'low_battery' | 'route_complete' | 'mission_complete' | 'manual_recall' | null
+
 export interface DroneState {
   id: string
   name: string
@@ -23,7 +29,14 @@ export interface DroneState {
   heading: number
   /** 速度 m/s */
   speed: number
-  battery: number
+  /** 当前剩余电量百分比，计算保留三位小数，展示保留一位小数 */
+  batteryPct: number
+  batteryState: BatteryState
+  returnReason: ReturnReason
+  /** 遥测序号，用于前端丢弃乱序快照 */
+  telemetrySeq: number
+  /** 遥测采样时间（Unix 毫秒） */
+  telemetryAt: number
   altitude: number
   routeId: string
   routeName: string
@@ -55,8 +68,10 @@ export const TRACK_MAX = 200
 export const ARRIVAL_THRESHOLD_M = 40
 /** 勘测盘旋半径（米） */
 export const ORBIT_RADIUS_M = 500
-/** 低电量返航阈值 */
-export const LOW_BATTERY_RTB = 15
+/** 统一电量阈值：低电告警 / 自动返航 / 严重低电 */
+export const LOW_BATTERY_PERCENT = 25
+export const AUTO_RETURN_PERCENT = 20
+export const CRITICAL_BATTERY_PERCENT = 10
 /** 应急改飞速度 m/s（勘测/增援改派时提速至此） */
 export const EMERGENCY_SPEED = 22
 /** 归舱后保留 tick 数（无航线机型超过即清理出机队） */
@@ -199,10 +214,12 @@ const TASK_NAMES = ['交通巡查', '事故识别', '重点区域巡航', '烟�
 /** 创建机队：每架无人机分配一条航线，初始随机落在航线前半段 */
 export function createFleet(routes: DroneRoute[], count: number, rng: () => number = Math.random): FleetState {
   const drones: DroneState[] = []
+  const telemetryAt = Date.now()
   for (let i = 0; i < count; i++) {
     const route = routes[i % routes.length]
     const startDistance = routeLengthMeters(route) * rng() * 0.5
     const { position, heading, progress } = pointAlongRoute(route, startDistance)
+    const batteryPct = 60 + Math.round(rng() * 40)
     drones.push({
       id: 'drone-' + (i + 1),
       name: 'DJI-M350-' + String(i + 1).padStart(3, '0'),
@@ -212,7 +229,11 @@ export function createFleet(routes: DroneRoute[], count: number, rng: () => numb
       lat: position[1],
       heading,
       speed: 12 + rng() * 6, // 12~18 m/s
-      battery: 60 + Math.round(rng() * 40),
+      batteryPct,
+      batteryState: batteryStateOf(batteryPct, 'flying'),
+      returnReason: null,
+      telemetrySeq: 0,
+      telemetryAt,
       altitude: 80 + Math.round(rng() * 40), // 80~120 m
       routeId: route.id,
       routeName: route.name,
@@ -235,8 +256,24 @@ function findRoute(routes: DroneRoute[], id: string): DroneRoute {
   return route
 }
 
-/** 电量每秒消耗 0.004%（演示节奏），回巢充满 */
-const BATTERY_DRAIN_PER_SEC = 0.004
+/** 电量每模拟秒消耗 0.004%；后端按 3 倍模拟速度推进 */
+export const BATTERY_DRAIN_PER_SEC = 0.004
+
+/** 限制到 0~100，并保留三位小数，避免每帧取一位小数导致耗电量被吞掉 */
+function normalizeBattery(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value * 1000) / 1000))
+}
+
+function drainBattery(batteryPct: number, dtSec: number): number {
+  return normalizeBattery(batteryPct - BATTERY_DRAIN_PER_SEC * dtSec)
+}
+
+export function batteryStateOf(batteryPct: number, status: DroneStatus): BatteryState {
+  if (status === 'docked') return batteryPct >= 100 ? 'full' : 'charging'
+  if (batteryPct <= CRITICAL_BATTERY_PERCENT) return 'critical'
+  if (batteryPct <= LOW_BATTERY_PERCENT) return 'low'
+  return 'normal'
+}
 
 function appendTrack(track: LngLat[], pos: LngLat): LngLat[] {
   const next = track.length >= TRACK_MAX ? track.slice(track.length - TRACK_MAX + 1) : track.slice()
@@ -259,7 +296,7 @@ function orbitStep(drone: DroneState, dtSec: number): DroneState {
     lat,
     heading: ((angle * 180) / Math.PI + 90 + 360) % 360,
     orbitAngle: angle,
-    battery: Math.max(0, Math.round((drone.battery - BATTERY_DRAIN_PER_SEC * dtSec) * 10) / 10),
+    batteryPct: drainBattery(drone.batteryPct, dtSec),
     track: appendTrack(drone.track, [lng, lat]),
   }
 }
@@ -269,7 +306,7 @@ function waypointStep(drone: DroneState, dtSec: number): DroneState {
   const target = drone.plannedRoute![0]
   const travel = drone.speed * dtSec
   const dist = distanceMeters([drone.lng, drone.lat], target)
-  const battery = Math.max(0, Math.round((drone.battery - BATTERY_DRAIN_PER_SEC * dtSec) * 10) / 10)
+  const batteryPct = drainBattery(drone.batteryPct, dtSec)
 
   if (dist <= Math.max(travel, ARRIVAL_THRESHOLD_M)) {
     // 到达当前途经点
@@ -278,20 +315,23 @@ function waypointStep(drone: DroneState, dtSec: number): DroneState {
       if (drone.mission === 'survey' && drone.status !== 'returning') {
         // 到达灾点 → 盘旋勘测（返航到家不在此列）
         return {
-          ...drone, lng: target[0], lat: target[1], battery,
+          ...drone, lng: target[0], lat: target[1], batteryPct,
           status: 'hovering', orbitCenter: target, orbitAngle: 0, plannedRoute: null,
+          returnReason: null,
           track: appendTrack(drone.track, target),
         }
       }
       // 投送完成/返航到家 → 归舱换电
       return {
-        ...drone, lng: target[0], lat: target[1], battery: 100,
+        ...drone, lng: target[0], lat: target[1], batteryPct: 100,
         status: 'docked', plannedRoute: null,
         track: appendTrack(drone.track, target),
       }
     }
     return {
-      ...drone, lng: target[0], lat: target[1], battery,
+      ...drone, lng: target[0], lat: target[1], batteryPct,
+      status: drone.mission === 'delivery' && rest.length === 1 ? 'returning' : drone.status,
+      returnReason: drone.mission === 'delivery' && rest.length === 1 ? 'mission_complete' : drone.returnReason,
       plannedRoute: rest, track: appendTrack(drone.track, target),
     }
   }
@@ -301,7 +341,7 @@ function waypointStep(drone: DroneState, dtSec: number): DroneState {
     ...drone,
     lng: next[0], lat: next[1],
     heading: bearingDegrees([drone.lng, drone.lat], target),
-    battery,
+    batteryPct,
     track: appendTrack(drone.track, next),
   }
 }
@@ -314,18 +354,22 @@ function patrolStep(drone: DroneState, routes: DroneRoute[], dtSec: number): Dro
   const direction = drone.status === 'returning' ? -1 : 1
   let currentDistance = drone.progress * total + travel * direction
   let status: DroneStatus = drone.status
-  let battery = drone.battery - BATTERY_DRAIN_PER_SEC * dtSec
+  let batteryPct = drainBattery(drone.batteryPct, dtSec)
+  let returnReason = drone.returnReason
 
   if (currentDistance >= total) {
     currentDistance = total
     status = 'returning'
+    returnReason = 'route_complete'
   } else if (currentDistance <= 0) {
     currentDistance = 0
     status = 'flying'
-    battery = 100 // 回巢换电
+    batteryPct = 100 // 回巢换电
+    returnReason = null
   }
-  if (battery < LOW_BATTERY_RTB && status === 'flying') {
+  if (batteryPct <= AUTO_RETURN_PERCENT && status === 'flying') {
     status = 'returning'
+    returnReason = 'low_battery'
   }
 
   const { position, heading } = pointAlongRoute(route, currentDistance)
@@ -335,7 +379,8 @@ function patrolStep(drone: DroneState, routes: DroneRoute[], dtSec: number): Dro
     lng: position[0],
     lat: position[1],
     heading: status === 'returning' ? (heading + 180) % 360 : heading,
-    battery: Math.max(0, Math.round(battery * 10) / 10),
+    batteryPct,
+    returnReason,
     progress: total === 0 ? 0 : currentDistance / total,
     track: appendTrack(drone.track, position),
   }
@@ -347,7 +392,12 @@ function patrolStep(drone: DroneState, routes: DroneRoute[], dtSec: number): Dro
  * - 改派机沿 plannedRoute 途经点飞行：勘测机到终点盘旋，投送机走完航段归舱
  * - 盘旋机低电量自动返航回家
  */
-export function advanceFleet(state: FleetState, routes: DroneRoute[], dtMs: number): FleetState {
+export function advanceFleet(
+  state: FleetState,
+  routes: DroneRoute[],
+  dtMs: number,
+  telemetryAt = Date.now(),
+): FleetState {
   const dtSec = dtMs / 1000
   const nextTick = state.tickCount + 1
   const stepped = state.drones.map((drone) => {
@@ -363,6 +413,7 @@ export function advanceFleet(state: FleetState, routes: DroneRoute[], dtMs: numb
           orbitCenter: null,
           orbitAngle: 0,
           progress: 0,
+          returnReason: null,
         }
       }
       return drone
@@ -370,22 +421,51 @@ export function advanceFleet(state: FleetState, routes: DroneRoute[], dtMs: numb
 
     if (drone.status === 'hovering' && drone.orbitCenter) {
       const stepped = orbitStep(drone, dtSec)
-      if (stepped.battery < 25) {
-        return { ...stepped, status: 'returning' as DroneStatus, orbitCenter: null, plannedRoute: [stepped.home] }
+      if (stepped.batteryPct <= AUTO_RETURN_PERCENT) {
+        return {
+          ...stepped,
+          status: 'returning' as DroneStatus,
+          returnReason: 'low_battery' as ReturnReason,
+          orbitCenter: null,
+          plannedRoute: [stepped.home],
+        }
       }
       return stepped
     }
 
     if (drone.plannedRoute && drone.plannedRoute.length > 0) {
-      return waypointStep(drone, dtSec)
+      const stepped = waypointStep(drone, dtSec)
+      if (
+        stepped.status !== 'docked' &&
+        stepped.status !== 'returning' &&
+        stepped.batteryPct <= AUTO_RETURN_PERCENT
+      ) {
+        return {
+          ...stepped,
+          status: 'returning' as DroneStatus,
+          returnReason: 'low_battery' as ReturnReason,
+          orbitCenter: null,
+          plannedRoute: [stepped.home],
+        }
+      }
+      return stepped
     }
 
     return patrolStep(drone, routes, dtSec)
   })
   // 新归舱的盖章 dockedAt；无航线机型超过保留期后清理出机队
-  const stamped = stepped.map((d, i) =>
-    d.status === 'docked' && state.drones[i].status !== 'docked' ? { ...d, dockedAt: nextTick } : d,
-  )
+  const stamped = stepped.map((d, i) => {
+    const withDockedAt = d.status === 'docked' && state.drones[i].status !== 'docked'
+      ? { ...d, dockedAt: nextTick }
+      : d
+    return {
+      ...withDockedAt,
+      batteryPct: normalizeBattery(withDockedAt.batteryPct),
+      batteryState: batteryStateOf(withDockedAt.batteryPct, withDockedAt.status),
+      telemetrySeq: nextTick,
+      telemetryAt,
+    }
+  })
   const drones = stamped.filter(
     (d) =>
       !(
@@ -404,7 +484,16 @@ export function divertDrone(state: FleetState, droneId: string, target: LngLat, 
     ...state,
     drones: state.drones.map((d) =>
       d.id === droneId
-        ? { ...d, mission, status: 'flying' as DroneStatus, plannedRoute: [target], orbitCenter: null, progress: 0, speed: Math.max(d.speed, EMERGENCY_SPEED) }
+        ? {
+            ...d,
+            mission,
+            status: 'flying' as DroneStatus,
+            returnReason: null,
+            plannedRoute: [target],
+            orbitCenter: null,
+            progress: 0,
+            speed: Math.max(d.speed, EMERGENCY_SPEED),
+          }
         : d,
     ),
   }
@@ -416,7 +505,13 @@ export function recallDrone(state: FleetState, droneId: string): FleetState {
     ...state,
     drones: state.drones.map((d) =>
       d.id === droneId && d.mission !== 'patrol' && d.status !== 'docked'
-        ? { ...d, status: 'returning' as DroneStatus, orbitCenter: null, plannedRoute: [d.home] }
+        ? {
+            ...d,
+            status: 'returning' as DroneStatus,
+            returnReason: 'manual_recall' as ReturnReason,
+            orbitCenter: null,
+            plannedRoute: [d.home],
+          }
         : d,
     ),
   }
@@ -439,6 +534,7 @@ export function launchDrone(
   opts: { name?: string; home: LngLat; waypoints: LngLat[]; taskName: string; mission?: Mission },
 ): FleetState {
   deliverySeq += 1
+  const telemetryAt = Date.now()
   const drone: DroneState = {
     id: 'delivery-' + deliverySeq,
     name: opts.name ?? 'DJI-M350-D' + String(deliverySeq).padStart(2, '0'),
@@ -448,7 +544,11 @@ export function launchDrone(
     lat: opts.home[1],
     heading: 0,
     speed: 12,
-    battery: 100,
+    batteryPct: 100,
+    batteryState: 'normal',
+    returnReason: null,
+    telemetrySeq: state.tickCount,
+    telemetryAt,
     altitude: 100,
     routeId: '',
     routeName: '临时投送航线',
@@ -470,6 +570,6 @@ export function fleetSummary(state: FleetState): { flying: number; returning: nu
   return {
     flying: active.filter((d) => d.status === 'flying' || d.status === 'hovering').length,
     returning: active.filter((d) => d.status === 'returning').length,
-    lowBattery: active.filter((d) => d.battery < 25).length,
+    lowBattery: active.filter((d) => d.batteryPct <= LOW_BATTERY_PERCENT).length,
   }
 }

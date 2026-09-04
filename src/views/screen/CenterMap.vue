@@ -147,7 +147,7 @@ function droneInfoHtml(d: DroneState): string {
     '<div>任务：' + d.taskName + '</div>' +
     '<div>航线：' + d.routeName + '</div>' +
     '<div>高度：' + d.altitude + ' m　速度：' + d.speed.toFixed(1) + ' m/s</div>' +
-    '<div>电量：' + d.battery + '%　状态：' + statusText + '</div>' +
+    '<div>电量：' + d.batteryPct.toFixed(1) + '%　状态：' + statusText + '</div>' +
     '<button class="js-video-btn" data-drone="' + d.id + '" style="margin-top:8px;width:100%;padding:5px 0;background:linear-gradient(90deg,#2f80ed,#56ccf2);border:none;border-radius:4px;color:#fff;font-size:12px;cursor:pointer">📹 观看实时视频</button>' +
     '</div>'
   )
