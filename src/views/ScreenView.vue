@@ -10,8 +10,10 @@ import CenterMap from './screen/CenterMap.vue'
 const { scale, offsetX, offsetY } = useScreenScale()
 const disaster = useDisaster()
 
-/** 当前演示灾点经公开地图数据反查后对应的地点名称 */
-const DISASTER_LOCATION_NAME = '上海市浦东新区金杨新村街道云山路'
+const KIND_NAME: Record<string, string> = { flood: '洪灾', debris: '泥石流', fire: '火灾' }
+
+/** 灾点真实地名（逆地理，街道级；回退区/地标） */
+const disasterLocation = computed(() => disaster.floodPlace.value ?? '定位中…')
 
 const disasterCoordinate = computed(() => {
   const position = disaster.flood.value?.position
@@ -31,8 +33,8 @@ const disasterCoordinate = computed(() => {
     >
       <TopBar />
       <div v-if="disaster.active.value" class="alarm-banner">
-        🚨 洪灾报警 · {{ 'ⅠⅡⅢ'[disaster.flood.value!.severity - 1] }} 级 ·
-        灾点 {{ DISASTER_LOCATION_NAME }}
+        🚨 {{ KIND_NAME[disaster.flood.value!.kind ?? 'flood'] }}报警 · {{ 'ⅠⅡⅢ'[disaster.flood.value!.severity - 1] }} 级 ·
+        灾点 {{ disasterLocation }}
         <span
           v-if="disasterCoordinate"
           class="alarm-coordinate"
