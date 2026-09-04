@@ -44,21 +44,43 @@ const aiReasoning = ref<string | null>(null)
 /** 灾点地名（高德逆地理；失败回退最近行政区） */
 export const floodPlace = ref<string | null>(null)
 
-/** 逆地理编码：用公开高德 key 调 REST regeo；任何失败静默回退 */
+/** AMap Geocoder 插件实例（与地图同源 JS key，精度到街道/路） */
+let geocoder: { getAddress: (loc: [number, number], cb: (status: string, result: { regeocode?: { formattedAddress?: string } }) => void) => void } | null = null
+
+/** JS API Geocoder（窗口 AMap 就绪后可用） */
+function jsApiGeocode(lng: number, lat: number): Promise<string | null> {
+  return new Promise((resolve) => {
+    const AMap = (window as unknown as Record<string, unknown>).AMap as {
+      plugin: (name: string, cb: () => void) => void
+      Geocoder: new () => NonNullable<typeof geocoder>
+    } | undefined
+    if (!AMap) { resolve(null); return }
+    try {
+      AMap.plugin('AMap.Geocoder', () => {
+        geocoder ??= new AMap.Geocoder()
+        geocoder!.getAddress([lng, lat], (status, result) => {
+          const addr = status === 'complete' ? result.regeocode?.formattedAddress : null
+          resolve(addr && typeof addr === 'string' ? addr : null)
+        })
+      })
+    } catch { resolve(null) }
+    setTimeout(() => resolve(null), 6000)
+  })
+}
+
+/** 逆地理编码：优先 JS API Geocoder（与地图同 key，街道级）→ REST → 行政区兜底 */
 async function reverseGeocode(lng: number, lat: number): Promise<void> {
   floodPlace.value = nearestDistrict([lng, lat]) // 先给行政区兜底
   try {
+    const addr = await jsApiGeocode(lng, lat)
+    if (addr) { floodPlace.value = addr.replace(/^上海市/, ''); return }
     const cfg = (await (await authFetch('/api/config/public')).json()) as { 'amap.key'?: string }
     const key = cfg['amap.key']
     if (!key) return
     const res = await fetch('https://restapi.amap.com/v3/geocode/regeo?location=' + lng + ',' + lat + '&key=' + key + '&extensions=base')
-    const data = (await res.json()) as { status: string; regeocode?: { addressComponent?: { township?: string; district?: string; streetNumber?: { street?: string } } } }
-    if (data.status !== '1' || !data.regeocode) return
-    const ac = data.regeocode.addressComponent
-    const street = ac?.streetNumber?.street && typeof ac.streetNumber.street === 'string' ? ac.streetNumber.street : ''
-    const township = ac?.township && typeof ac.township === 'string' ? ac.township : ''
-    const district = ac?.district ?? ''
-    floodPlace.value = district + (street || township) || district || floodPlace.value
+    const data = (await res.json()) as { status: string; regeocode?: { formattedAddress?: string } }
+    const addrRest = data.status === '1' ? data.regeocode?.formattedAddress : null
+    if (addrRest) floodPlace.value = addrRest.replace(/^上海市/, '')
   } catch { /* 回退行政区 */ }
 }
 
