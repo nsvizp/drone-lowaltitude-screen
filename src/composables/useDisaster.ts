@@ -1,55 +1,32 @@
 import { computed, ref } from 'vue'
-import {
-  createFloodEvent,
-  pickShelters,
-  planFloodDispatch,
-  type DispatchPlan,
-  type FloodEvent,
-  type FlyerInfo,
-  type ShelterInfo,
-} from '@/sim/disaster'
-import {
-  assessSituation,
-  detectSupplyDrops,
-  evaluateReinforcement,
-  initSituation,
-  recordDelivery,
-  summarizeSituation,
-  type ReinforcementEval,
-  type SituationState,
-  type SituationSummary,
-} from '@/sim/situation'
-import { mulberry32, type FleetState } from '@/sim/drone-sim'
-import { createEmergencyData } from '@/sim/emergency-data'
+import { getSocket } from '@/api/socket'
+import type { DispatchPlan, FloodEvent } from '@/sim/disaster'
+import type { ReinforcementEval, SituationState, SituationSummary } from '@/sim/situation'
 
-/** 洪灾演练区域（市区核心，保证应急响应在 1~2 分钟内到场） */
-const FLOOD_AREA = { minLng: 121.42, maxLng: 121.62, minLat: 31.16, maxLat: 31.26 }
-import { onFleetTick, useDrones } from './useDrones'
-import { pushFeed, pushNode } from './event-log'
-
-const SEVERITY_TEXT: Record<number, string> = { 1: 'Ⅰ 级', 2: 'Ⅱ 级', 3: 'Ⅲ 级' }
-
-/** 方舱（含备用机编制）与飞手名册（源自 mock 接口数据） */
-export const SHELTERS: ShelterInfo[] = [
-  { id: 4001, name: '1号方舱', position: [121.4990, 31.2410], spareDrones: 2 },
-  { id: 4002, name: '2号方舱', position: [121.4450, 31.1890], spareDrones: 2 },
-  { id: 4003, name: '3号方舱', position: [121.5950, 31.2050], spareDrones: 2 },
-  { id: 4004, name: '4号方舱', position: [121.3330, 31.2000], spareDrones: 1 },
+/** 方舱（含备用机编制）与飞手名册（展示用常量；权威数据在后端 ledger 表） */
+export const SHELTERS = [
+  { id: 4001, name: '1号方舱', position: [121.499, 31.241] as [number, number], spareDrones: 2 },
+  { id: 4002, name: '2号方舱', position: [121.445, 31.189] as [number, number], spareDrones: 2 },
+  { id: 4003, name: '3号方舱', position: [121.595, 31.205] as [number, number], spareDrones: 2 },
+  { id: 4004, name: '4号方舱', position: [121.333, 31.2] as [number, number], spareDrones: 1 },
 ]
-
-export const FLYERS: FlyerInfo[] = [
+export const FLYERS = [
   { id: 3001, name: '张三', lastMission: '2026-05-13 07:50' },
   { id: 3002, name: '李四', lastMission: '2026-05-13 15:40' },
   { id: 3003, name: '王五', lastMission: '2026-05-12 20:10' },
   { id: 3004, name: '赵六', lastMission: '2026-05-12 11:25' },
 ]
 
-/** 单架投送机载货量（包） */
-const PACKS_PER_SORTIE = 200
-/** 每多少 tick 生成一条现场观测（1s tick → 约 6s 一条） */
-const ASSESS_INTERVAL_TICKS = 6
+interface DisasterSnapshot {
+  flood: FloodEvent | null
+  plan: DispatchPlan | null
+  situation: SituationState | null
+  summary: SituationSummary | null
+  eval: ReinforcementEval | null
+  reinforced: boolean
+}
 
-// ---------- 模块级灾情状态（共享单例） ----------
+// ---------- 模块级灾情状态（镜像服务端权威状态） ----------
 const flood = ref<FloodEvent | null>(null)
 const plan = ref<DispatchPlan | null>(null)
 const situation = ref<SituationState | null>(null)
@@ -58,151 +35,39 @@ const evalResult = ref<ReinforcementEval | null>(null)
 const reinforced = ref(false)
 const videoDroneId = ref<string | null>(null)
 
-let prevLegs = new Map<string, number>()
-const recordedDrops = new Set<string>()
-let surveyArrivedAnnounced = false
-let hookRegistered = false
+let connected = false
 
-function refreshEval(fleet: FleetState): void {
-  if (!situation.value) return
-  const surveyCount = fleet.drones.filter((d) => d.mission === 'survey' && d.status !== 'docked').length
-  const nextSummary = summarizeSituation(situation.value, Math.max(surveyCount, 1))
-  if (JSON.stringify(nextSummary) !== JSON.stringify(summaryRef.value)) summaryRef.value = nextSummary
-  const nextEval = evaluateReinforcement(nextSummary, fleet)
-  if (JSON.stringify(nextEval) !== JSON.stringify(evalResult.value)) evalResult.value = nextEval
+function applySnapshot(s: DisasterSnapshot): void {
+  flood.value = s.flood
+  plan.value = s.plan
+  situation.value = s.situation
+  summaryRef.value = s.summary
+  evalResult.value = s.eval
+  reinforced.value = s.reinforced
 }
 
-function onTick(fleet: FleetState): void {
-  if (!flood.value || !situation.value) return
-
-  // 现场观测：有盘旋勘测机才产生事件流
-  const surveyor = fleet.drones.find((d) => d.mission === 'survey' && d.status === 'hovering')
-  // 勘测机到场节点（首次进入盘旋）
-  if (surveyor && !surveyArrivedAnnounced) {
-    surveyArrivedAnnounced = true
-    pushNode('勘测机到场', surveyor.name + ' 等开始盘旋勘测')
-  }
-  if (surveyor && fleet.tickCount % ASSESS_INTERVAL_TICKS === 0) {
-    const rng = mulberry32(fleet.tickCount * 7919)
-    const before = situation.value.events.length
-    situation.value = assessSituation(situation.value, rng, fleet.tickCount, surveyor.name)
-    // 镜像新增的现场观测到全局事件动态
-    const events = situation.value.events
-    if (events.length > before) pushFeed('field', events[events.length - 1].text)
-  }
-
-  // 投送登记：越过灾点那一刻即空投完成（不等返程归舱）
-  const drops = detectSupplyDrops(fleet, prevLegs)
-  prevLegs = drops.nextLegs
-  const newDrops = drops.droppedIds.filter((id) => !recordedDrops.has(id))
-  if (newDrops.length > 0) {
-    for (const id of newDrops) recordedDrops.add(id)
-    const names = newDrops
-      .map((id) => fleet.drones.find((d) => d.id === id)?.name ?? id)
-      .join('、')
-    situation.value = recordDelivery(situation.value, newDrops.length * PACKS_PER_SORTIE)
-    const dropText = '投送组：' + names + ' 已在灾点上空空投（+' + newDrops.length * PACKS_PER_SORTIE + ' 件），正在返航'
-    situation.value = {
-      ...situation.value,
-      events: [...situation.value.events, {
-        seq: situation.value.events.length + 1,
-        tick: fleet.tickCount,
-        kind: 'supply' as const,
-        text: dropText,
-      }].slice(-30),
-    }
-    pushFeed('supply', dropText)
-    pushNode('空投完成', names + ' · 累计 ' + situation.value.deliveredPacks + ' 件物资')
-  }
-
-  refreshEval(fleet)
+function connect(): void {
+  if (connected) return
+  connected = true
+  getSocket().on('disaster', applySnapshot)
+  // 兜底：socket 未通时拉一次 REST 快照
+  fetch('/api/disaster/state')
+    .then((r) => (r.ok ? r.json() : null))
+    .then((s) => { if (s) applySnapshot(s) })
+    .catch(() => undefined)
 }
 
 export function useDisaster() {
-  const { drones, divert, launch } = useDrones()
+  connect()
 
-  if (!hookRegistered) {
-    hookRegistered = true
-    onFleetTick(onTick)
-  }
-
-  /** 模拟洪灾：随机灾点 → 调配引擎 → 改派勘测 + 方舱起飞投送 */
+  /** 模拟洪灾（服务端生成灾点并执行调配） */
   const simulateFlood = () => {
-    const currentDrones = drones.value
-    if (currentDrones.length === 0) return
-    const rng = mulberry32(Date.now() % 100000)
-    const floodEvent = createFloodEvent(rng, FLOOD_AREA, 0)
-    const supplies = createEmergencyData(mulberry32(20260903)).supplies
-
-    const fleetSnapshot: FleetState = { drones: currentDrones, tickCount: 0 }
-    const dispatchPlan = planFloodDispatch(fleetSnapshot, SHELTERS, FLYERS, supplies, floodEvent)
-
-    // 执行调配：勘测组改飞
-    for (const s of dispatchPlan.survey) divert(s.droneId, floodEvent.position, 'survey')
-    // 执行调配：投送组从方舱起飞（方舱 → 物资点 → 灾点 → 方舱）
-    if (dispatchPlan.delivery) {
-      const d = dispatchPlan.delivery
-      for (let i = 0; i < d.droneCount; i++) {
-        launch({
-          home: d.legs[0],
-          waypoints: d.legs.slice(1),
-          taskName: '洪灾物资投送 · ' + d.supplySiteName,
-          mission: 'delivery',
-        })
-      }
-    }
-
-    flood.value = floodEvent
-    plan.value = dispatchPlan
-    situation.value = initSituation(floodEvent)
-    summaryRef.value = null
-    evalResult.value = null
-    reinforced.value = false
-    prevLegs = new Map()
-    recordedDrops.clear()
-    surveyArrivedAnnounced = false
-
-    // 事件日志：灾情节点 + 初次调配节点 + 报警动态
-    pushNode('⚠ 灾情发生', SEVERITY_TEXT[floodEvent.severity] + '洪灾 · ' + floodEvent.position[0].toFixed(4) + ', ' + floodEvent.position[1].toFixed(4))
-    pushNode('初次调配下达', dispatchPlan.survey.length + ' 架勘测机改派 · ' + (dispatchPlan.delivery ? dispatchPlan.delivery.shelterName + ' ' + dispatchPlan.delivery.droneCount + ' 架投送 ' + dispatchPlan.delivery.droneCount * PACKS_PER_SORTIE + ' 件物资' : '无投送'))
-    pushFeed('disaster', SEVERITY_TEXT[floodEvent.severity] + '洪灾报警，抢险勘测与物资投送启动')
+    void fetch('/api/disaster/simulate', { method: 'POST' }).catch(() => undefined)
   }
 
-  /** 执行二次调配增援：增派勘测机 + 追加投送架次 */
+  /** 执行二次调配增援 */
   const executeReinforcement = () => {
-    if (!flood.value || !evalResult.value?.needed || reinforced.value || !plan.value) return
-    const shelter = pickShelters(SHELTERS, flood.value, 2)[1] ?? SHELTERS[0] // 次近方舱（按实际距离）
-    launch({
-      name: 'DJI-M350-R1',
-      home: shelter.position,
-      waypoints: [flood.value.position],
-      taskName: '增援勘测',
-      mission: 'survey',
-    })
-    if (plan.value.delivery) {
-      const d = plan.value.delivery
-      launch({
-        name: 'DJI-M350-R2',
-        home: d.legs[0],
-        waypoints: d.legs.slice(1),
-        taskName: '增援投送 · ' + d.supplySiteName,
-        mission: 'delivery',
-      })
-    }
-    reinforced.value = true
-    if (situation.value) {
-      situation.value = {
-        ...situation.value,
-        events: [...situation.value.events, {
-          seq: situation.value.events.length + 1,
-          tick: situation.value.events.length,
-          kind: 'supply' as const,
-          text: '指挥部：二次调配增援已执行，增援勘测机与投送架次已起飞',
-        }].slice(-30),
-      }
-    }
-    pushFeed('disaster', '二次调配增援已执行，增援机已起飞')
-    pushNode('二次增援执行', shelter.name + ' 起飞增援勘测/投送')
+    void fetch('/api/disaster/reinforce', { method: 'POST' }).catch(() => undefined)
   }
 
   const openVideo = (droneId: string) => { videoDroneId.value = droneId }

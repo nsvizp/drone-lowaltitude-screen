@@ -1,0 +1,5 @@
+{
+  "//": "后端 ts-node 以 CJS 运行，须覆盖根 package.json 的 type:module；前端 Vite 不读取此字段",
+  "type": "commonjs",
+  "private": true
+}

@@ -1,4 +1,5 @@
 import { ref } from 'vue'
+import { getSocket } from '@/api/socket'
 import { onFleetTick } from './useDrones'
 import type { FleetState, Mission } from '@/sim/drone-sim'
 
@@ -100,7 +101,31 @@ let fleetHookRegistered = false
 const fleetPrev = new Map<string, DronePrev>()
 let baselineDone = false
 
+let socketWired = false
+
+function wireSocket(): void {
+  if (socketWired) return
+  socketWired = true
+  const s = getSocket()
+  // 服务端灾情域事件（灾情/投送/现场观测/节点）
+  s.on('feed', (e: { kind: FeedKind; text: string; time: string }) => {
+    feedSeq += 1
+    feedEvents.value = appendCapped(feedEvents.value, { seq: feedSeq, ...e }, FEED_MAX)
+  })
+  s.on('node', (n: { title: string; detail: string; time: string }) => {
+    nodeSeq += 1
+    nodeRecords.value = appendCapped(nodeRecords.value, { seq: nodeSeq, ...n }, NODE_MAX)
+    pushFeed('disaster', '节点：' + n.title)
+  })
+  // 首次连接补历史
+  s.on('history', (h: { feed: { kind: FeedKind; text: string; time: string }[]; nodes: { title: string; detail: string; time: string }[] }) => {
+    for (const e of h.feed) { feedSeq += 1; feedEvents.value = appendCapped(feedEvents.value, { seq: feedSeq, ...e }, FEED_MAX) }
+    for (const n of h.nodes) { nodeSeq += 1; nodeRecords.value = appendCapped(nodeRecords.value, { seq: nodeSeq, ...n }, NODE_MAX) }
+  })
+}
+
 export function useEventLog() {
+  wireSocket()
   if (!fleetHookRegistered) {
     fleetHookRegistered = true
     onFleetTick((fleet) => {

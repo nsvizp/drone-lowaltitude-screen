@@ -14,7 +14,7 @@
     "noEmit": true,
     "types": ["vite/client", "vitest/globals"],
     "baseUrl": ".",
-    "paths": { "@/*": ["src/*"] }
+    "paths": { "@/sim/*": ["shared/sim/*"], "@/*": ["src/*"] }
   },
-  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue", "vite.config.ts"]
+  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue", "shared/**/*.ts", "vite.config.ts"]
 }

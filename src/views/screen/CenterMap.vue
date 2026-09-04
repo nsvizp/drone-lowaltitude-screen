@@ -24,7 +24,7 @@ const theme = ref<MapTheme>('dark')
 const mapError = ref('')
 const selected = ref<DroneState | null>(null)
 
-const { routes, drones, summary } = useDrones(8)
+const { routes, drones, summary } = useDrones()
 const disaster = useDisaster()
 
 /** 方舱固定点位（演示数据） */
