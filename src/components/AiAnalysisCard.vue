@@ -27,7 +27,6 @@ interface AiParagraph { tag: string; text: string }
 /** 依据实时状态（灾情/物资/人员/车辆/机队）生成一整套推演脚本 */
 function buildScript(): { think: string[]; paras: AiParagraph[] } {
   const f = disaster.flood.value
-  const sit = disaster.situation.value
   const sum = disaster.summary.value
 
   const think: string[] = [
@@ -44,15 +43,13 @@ function buildScript(): { think: string[]; paras: AiParagraph[] } {
   const kind = f ? (f.kind === 'debris' ? '泥石流' : '洪灾') : '洪灾'
   const sev = f ? 'ⅠⅡⅢ'[f.severity - 1] : 'Ⅱ'
   const pos = f ? f.position[0].toFixed(3) + ', ' + f.position[1].toFixed(3) : '121.468, 31.215'
-  const water = sit ? sit.waterLevelM.toFixed(1) : '1.8'
-  const area = sum ? sum.areaKm2 : 1.2
-  const trapped = sum ? sum.trapped : 26
+  const delivered = sum ? sum.deliveredPacks : 0
 
   paras.push({
     tag: '🌊 灾情研判',
     text:
-      '检测到' + kind + sev + '级灾害，灾点位于（' + pos + '）。当前水位 ' + water +
-      'm，受淹面积约 ' + area + ' km²，估算被困 ' + trapped + ' 人，影响范围呈扩大趋势。',
+      '检测到' + kind + sev + '级灾害，灾点位于（' + pos + '）。' +
+      (delivered > 0 ? '已累计投送应急物资 ' + delivered + ' 件，' : '') + '影响范围呈扩大趋势，需持续盯防。',
   })
 
   const supplies = emergencyData.supplies
@@ -98,7 +95,7 @@ function buildScript(): { think: string[]; paras: AiParagraph[] } {
     tag: '✅ 综合结论',
     text:
       '建议启动' + sev + '级应急响应：① 优先投送饮用水与救生器材；② 增派 1 架勘测机扩大覆盖；' +
-      '③ 2 台运输车立即出发；④ 每 30 分钟复核水位与被困人数。',
+      '③ 2 台运输车立即出发；④ 勘测机每 30 分钟回传一轮复核画面。',
   })
 
   return { think, paras }

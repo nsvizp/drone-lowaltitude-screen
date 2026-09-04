@@ -9,7 +9,6 @@ import { useDisaster } from '@/composables/useDisaster'
 import { authFetch } from '@/api/http'
 import { backendOnline } from '@/api/socket'
 import DispatchCard from '@/components/DispatchCard.vue'
-import SituationCard from '@/components/SituationCard.vue'
 import VideoFeed from '@/components/VideoFeed.vue'
 import AiAnalysisCard from '@/components/AiAnalysisCard.vue'
 
@@ -509,7 +508,6 @@ onBeforeUnmount(() => {
     </div>
 
     <DispatchCard />
-    <SituationCard />
     <VideoFeed />
 	<AiAnalysisCard/>
 
