@@ -31,6 +31,14 @@ const { routes, drones, summary } = useDrones()
 const disaster = useDisaster()
 const { activeFlightCase, clearFlightCase } = useFlightCases()
 
+/** AI 推演面板引用：点击「模拟灾害」时触发（只执行一次） */
+const aiCardRef = ref<{ start: () => void } | null>(null)
+
+function simulateDisaster(type: 'flood' | 'debris' | 'fire'): void {
+  disaster.simulateFlood(type)
+  aiCardRef.value?.start()
+}
+
 /** 方舱固定点位（演示数据） */
 const SHELTERS = [
   { id: 4001, name: '1号方舱', position: [121.4990, 31.2410] as [number, number] },
@@ -567,21 +575,21 @@ onBeforeUnmount(() => {
       <button
         class="center-map__disaster"
         :disabled="disaster.active.value || !backendOnline"
-        @click="disaster.simulateFlood('flood')"
+        @click="simulateDisaster('flood')"
       >
         {{ disaster.active.value ? '🔴 抢险进行中…' : '⚠ 模拟洪灾' }}
       </button>
       <button
         class="center-map__disaster center-map__disaster--debris"
         :disabled="disaster.active.value || !backendOnline"
-        @click="disaster.simulateFlood('debris')"
+        @click="simulateDisaster('debris')"
       >
         {{ disaster.active.value ? '🔴 抢险进行中…' : '⛰ 模拟泥石流' }}
       </button>
       <button
         class="center-map__disaster center-map__disaster--fire"
         :disabled="disaster.active.value || !backendOnline"
-        @click="disaster.simulateFlood('fire')"
+        @click="simulateDisaster('fire')"
       >
         {{ disaster.active.value ? '🔴 抢险进行中…' : '🔥 模拟火灾' }}
       </button>
@@ -596,7 +604,7 @@ onBeforeUnmount(() => {
 
     <DispatchCard />
     <VideoFeed />
-	<AiAnalysisCard/>
+    <AiAnalysisCard ref="aiCardRef" />
 
     <div class="center-map__themes">
       <button

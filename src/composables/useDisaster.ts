@@ -21,6 +21,7 @@ export const FLYERS = [
 interface DisasterSnapshot {
   flood: FloodEvent | null
   plan: DispatchPlan | null
+  pendingPlan: DispatchPlan | null
   situation: SituationState | null
   summary: SituationSummary | null
   eval: ReinforcementEval | null
@@ -30,6 +31,7 @@ interface DisasterSnapshot {
 // ---------- 模块级灾情状态（镜像服务端权威状态） ----------
 const flood = ref<FloodEvent | null>(null)
 const plan = ref<DispatchPlan | null>(null)
+const pendingPlan = ref<DispatchPlan | null>(null)
 const situation = ref<SituationState | null>(null)
 const summaryRef = ref<SituationSummary | null>(null)
 const evalResult = ref<ReinforcementEval | null>(null)
@@ -41,6 +43,7 @@ let connected = false
 function applySnapshot(s: DisasterSnapshot): void {
   flood.value = s.flood
   plan.value = s.plan
+  pendingPlan.value = s.pendingPlan
   situation.value = s.situation
   summaryRef.value = s.summary
   evalResult.value = s.eval
@@ -61,13 +64,19 @@ function connect(): void {
 export function useDisaster() {
   connect()
 
-  /** 模拟灾情（服务端生成灾点并执行调配）：flood 洪灾 / debris 泥石流 */
+  /** 模拟灾情感知（服务端仅生成灾点与调配草稿，等待指挥确认）：
+   *  flood 洪灾 / debris 泥石流 */
   const simulateFlood = (type: 'flood' | 'debris' | 'fire' = 'flood') => {
     void authFetch('/api/disaster/simulate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type }),
     }).catch(() => undefined)
+  }
+
+  /** 指挥确认调配：下达抢险调配单，初始化现场态势实时动态 */
+  const executeDispatch = () => {
+    void authFetch('/api/disaster/execute', { method: 'POST' }).catch(() => undefined)
   }
 
   /** 执行二次调配增援 */
@@ -84,12 +93,12 @@ export function useDisaster() {
   const closeVideo = () => { videoDroneId.value = null }
 
   // 调试/验收钩子（Playwright 探针）
-  ;(window as unknown as Record<string, unknown>).__DISASTER = { flood, plan, situation, summaryRef, evalResult, openVideo, closeVideo }
+  ;(window as unknown as Record<string, unknown>).__DISASTER = { flood, plan, pendingPlan, situation, summaryRef, evalResult, openVideo, closeVideo }
 
   const active = computed(() => flood.value !== null)
 
   return {
-    flood, plan, situation, summary: summaryRef, evalResult, reinforced, active, videoDroneId,
-    simulateFlood, executeReinforcement, resolveDisaster, openVideo, closeVideo,
+    flood, plan, pendingPlan, situation, summary: summaryRef, evalResult, reinforced, active, videoDroneId,
+    simulateFlood, executeDispatch, executeReinforcement, resolveDisaster, openVideo, closeVideo,
   }
 }

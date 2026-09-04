@@ -4,8 +4,10 @@ import { useDisaster } from '@/composables/useDisaster'
 import { useDrones } from '@/composables/useDrones'
 import { liveEta, liveSurveyRows } from '@/sim/live-dispatch'
 
-const { flood, plan, evalResult, reinforced, executeReinforcement } = useDisaster()
+const { flood, plan, pendingPlan, evalResult, reinforced, executeDispatch, executeReinforcement } = useDisaster()
 const { drones } = useDrones()
+
+const KIND_NAME: Record<string, string> = { flood: '洪灾', debris: '泥石流', fire: '火灾' }
 
 /** 勘测组实时行：电量/距离/ETA 随机队 WS 快照每秒刷新 */
 const liveRows = computed(() => (plan.value ? liveSurveyRows(plan.value, drones.value) : []))
@@ -30,10 +32,34 @@ function etaText(sec: number, arrived?: boolean): string {
 </script>
 
 <template>
-  <div v-if="plan && flood" class="dispatch-card">
+  <!-- 草稿态：灾情感知后、指挥确认前（算法兜底路径：AI 面板不可用时可在此直接确认） -->
+  <div v-if="flood && !plan && pendingPlan" class="dispatch-card dispatch-card--draft">
+    <div class="dispatch-card__head">
+      <span class="dispatch-card__title">📋 抢险调配单（草稿 · 待确认）</span>
+      <span class="dispatch-card__severity" :data-sev="flood.severity">{{ 'ⅠⅡⅢ'[flood.severity - 1] }} 级{{ KIND_NAME[flood.kind ?? 'flood'] }}</span>
+    </div>
+    <div class="dispatch-card__coord">
+      灾点 {{ flood.position[0].toFixed(4) }}, {{ flood.position[1].toFixed(4) }}
+    </div>
+    <div class="dispatch-card__group">
+      <div class="dispatch-card__group-title">勘测组（拟改派 {{ pendingPlan.survey.length }} 架）</div>
+      <div v-for="s in pendingPlan.survey" :key="s.droneId" class="dispatch-card__row">
+        <span class="dispatch-card__name">{{ s.droneName }}</span>
+        <span class="dispatch-card__dim">{{ s.distanceKm }}km · ETA {{ etaText(s.etaSec) }}</span>
+      </div>
+    </div>
+    <div v-if="pendingPlan.delivery" class="dispatch-card__group">
+      <div class="dispatch-card__group-title">投送组（拟 {{ pendingPlan.delivery.shelterName }} 起飞 {{ pendingPlan.delivery.droneCount }} 架）</div>
+      <div class="dispatch-card__dim">{{ pendingPlan.delivery.supplySiteName }} · 全程 {{ pendingPlan.delivery.totalKm }}km</div>
+    </div>
+    <button class="dispatch-card__btn dispatch-card__btn--confirm" @click="executeDispatch">✅ 确认下达调配</button>
+  </div>
+
+  <!-- 执行态：确认下达后（实时遥测） -->
+  <div v-else-if="plan && flood" class="dispatch-card">
     <div class="dispatch-card__head">
       <span class="dispatch-card__title">🚨 抢险调配单</span>
-      <span class="dispatch-card__severity" :data-sev="flood.severity">{{ 'ⅠⅡⅢ'[flood.severity - 1] }} 级洪灾</span>
+      <span class="dispatch-card__severity" :data-sev="flood.severity">{{ 'ⅠⅡⅢ'[flood.severity - 1] }} 级{{ KIND_NAME[flood.kind ?? 'flood'] }}</span>
     </div>
     <div class="dispatch-card__coord">
       灾点 {{ flood.position[0].toFixed(4) }}, {{ flood.position[1].toFixed(4) }}
@@ -168,6 +194,17 @@ function etaText(sec: number, arrived?: boolean): string {
   &__eval-title { font-size: 12px; font-weight: 600; color: #ffd666; }
   &__reasons { margin: 4px 0; padding: 0; list-style: none; color: var(--text-dim); font-size: 11px; }
   &__rec { font-size: 11px; color: var(--accent); margin-top: 3px; }
+
+  &--draft { border-color: rgba(255, 214, 102, 0.6); box-shadow: 0 0 20px rgba(255, 214, 102, 0.15); }
+
+  &__btn--confirm {
+    width: 100%;
+    margin-top: 10px;
+    background: rgba(255, 214, 102, 0.25);
+    border-color: rgba(255, 214, 102, 0.6);
+
+    &:hover:not(:disabled) { background: rgba(255, 214, 102, 0.4); }
+  }
 
   &__btn {
     margin-top: 6px;

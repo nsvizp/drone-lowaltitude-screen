@@ -52,6 +52,8 @@ const FLYERS: FlyerInfo[] = [
 export interface DisasterSnapshot {
   flood: FloodEvent | null
   plan: DispatchPlan | null
+  /** 调配草稿：灾情感知后由推演生成，指挥确认（executeDispatch）后才生效执行 */
+  pendingPlan: DispatchPlan | null
   situation: SituationState | null
   summary: SituationSummary | null
   eval: ReinforcementEval | null
@@ -64,6 +66,7 @@ export class DisasterService implements OnModuleInit {
   private flood: FloodEvent | null = null
   private disasterId: number | null = null
   private plan: DispatchPlan | null = null
+  private pendingPlan: DispatchPlan | null = null
   private situation: SituationState | null = null
   private summary: SituationSummary | null = null
   private evalResult: ReinforcementEval | null = null
@@ -88,6 +91,7 @@ export class DisasterService implements OnModuleInit {
     return {
       flood: this.flood,
       plan: this.plan,
+      pendingPlan: this.pendingPlan,
       situation: this.situation,
       summary: this.summary,
       eval: this.evalResult,
@@ -128,22 +132,11 @@ export class DisasterService implements OnModuleInit {
     const fleetSnapshot: FleetState = { drones: currentDrones, tickCount: 0 }
     const dispatchPlan = planFloodDispatch(fleetSnapshot, SHELTERS, FLYERS, supplies, floodEvent)
 
-    for (const s of dispatchPlan.survey) this.fleet.divert(s.droneId, floodEvent.position, 'survey')
-    if (dispatchPlan.delivery) {
-      const d = dispatchPlan.delivery
-      for (let i = 0; i < d.droneCount; i++) {
-        this.fleet.launch({
-          home: d.legs[0],
-          waypoints: d.legs.slice(1),
-          taskName: dName + '物资投送 · ' + d.supplySiteName,
-          mission: 'delivery',
-        })
-      }
-    }
-
+    // 两段式：先感知 + 生成调配草稿，机队按兵不动；指挥确认（executeDispatch）后才执行
     this.flood = floodEvent
-    this.plan = dispatchPlan
-    this.situation = initSituation(floodEvent)
+    this.pendingPlan = dispatchPlan
+    this.plan = null
+    this.situation = null
     this.summary = null
     this.evalResult = null
     this.reinforced = false
@@ -157,10 +150,40 @@ export class DisasterService implements OnModuleInit {
     })
     this.disasterId = rec.id
 
-    // 事件日志：灾情节点 + 初次调配节点 + 报警动态
+    // 事件日志：灾情节点 + 报警动态（等待指挥确认）
     this.log.pushNode('⚠ 灾情发生', SEVERITY_TEXT[floodEvent.severity] + dName + ' · ' + floodEvent.position[0].toFixed(4) + ', ' + floodEvent.position[1].toFixed(4), this.disasterId)
-    this.log.pushNode('初次调配下达', dispatchPlan.survey.length + ' 架勘测机改派 · ' + (dispatchPlan.delivery ? dispatchPlan.delivery.shelterName + ' ' + dispatchPlan.delivery.droneCount + ' 架投送 ' + dispatchPlan.delivery.droneCount * PACKS_PER_SORTIE + ' 件物资' : '无投送'), this.disasterId)
-    this.log.pushFeed('disaster', SEVERITY_TEXT[floodEvent.severity] + dName + '报警，抢险勘测与物资投送启动')
+    this.log.pushFeed('disaster', SEVERITY_TEXT[floodEvent.severity] + dName + '报警，推演生成抢险调配方案，等待指挥确认')
+
+    this.broadcastIfChanged()
+    return this.getState()
+  }
+
+  /** 指挥确认下达：草稿生效——勘测机改派 + 方舱起飞投送 + 态势初始化 */
+  executeDispatch(): DisasterSnapshot {
+    if (!this.flood || !this.pendingPlan) return this.getState()
+    const floodEvent = this.flood
+    const dispatchPlan = this.pendingPlan
+    const dName = DISASTER_NAME[floodEvent.kind ?? 'flood']
+
+    for (const s of dispatchPlan.survey) this.fleet.divert(s.droneId, floodEvent.position, 'survey')
+    if (dispatchPlan.delivery) {
+      const d = dispatchPlan.delivery
+      for (let i = 0; i < d.droneCount; i++) {
+        this.fleet.launch({
+          home: d.legs[0],
+          waypoints: d.legs.slice(1),
+          taskName: dName + '物资投送 · ' + d.supplySiteName,
+          mission: 'delivery',
+        })
+      }
+    }
+
+    this.plan = dispatchPlan
+    this.pendingPlan = null
+    this.situation = initSituation(floodEvent)
+
+    this.log.pushNode('初次调配下达', dispatchPlan.survey.length + ' 架勘测机改派 · ' + (dispatchPlan.delivery ? dispatchPlan.delivery.shelterName + ' ' + dispatchPlan.delivery.droneCount + ' 架投送 ' + dispatchPlan.delivery.droneCount * PACKS_PER_SORTIE + ' 件物资' : '无投送'), this.disasterId ?? undefined)
+    this.log.pushFeed('disaster', '指挥确认：抢险调配单下达，勘测与投送启动')
 
     this.broadcastIfChanged()
     return this.getState()
@@ -223,6 +246,7 @@ export class DisasterService implements OnModuleInit {
     this.fleet.recallAll()
     this.flood = null
     this.plan = null
+    this.pendingPlan = null
     this.situation = null
     this.summary = null
     this.evalResult = null

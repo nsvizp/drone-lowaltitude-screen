@@ -15,6 +15,12 @@ export class SimHostController {
     return this.disaster.simulateFlood(type === 'debris' ? 'debris' : type === 'fire' ? 'fire' : 'flood')
   }
 
+  /** 指挥确认下达（两段式：simulate 生成草稿后由此执行） */
+  @Post('disaster/execute')
+  execute() {
+    return this.disaster.executeDispatch()
+  }
+
   /** 执行二次增援（前端「执行增援」按钮） */
   @Post('disaster/reinforce')
   reinforce() {
