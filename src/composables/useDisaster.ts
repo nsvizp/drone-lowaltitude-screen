@@ -61,7 +61,7 @@ export function useDisaster() {
   connect()
 
   /** 模拟灾情（服务端生成灾点并执行调配）：flood 洪灾 / debris 泥石流 */
-  const simulateFlood = (type: 'flood' | 'debris' = 'flood') => {
+  const simulateFlood = (type: 'flood' | 'debris' | 'fire' = 'flood') => {
     void fetch('/api/disaster/simulate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
