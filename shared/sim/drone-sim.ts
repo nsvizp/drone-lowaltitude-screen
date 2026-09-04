@@ -410,6 +410,27 @@ export function divertDrone(state: FleetState, droneId: string, target: LngLat, 
   }
 }
 
+/** 演练结束撤机：任务机（勘测/投送）立即返航回家归舱。巡航/归舱机不受影响。纯函数。 */
+export function recallDrone(state: FleetState, droneId: string): FleetState {
+  return {
+    ...state,
+    drones: state.drones.map((d) =>
+      d.id === droneId && d.mission !== 'patrol' && d.status !== 'docked'
+        ? { ...d, status: 'returning' as DroneStatus, orbitCenter: null, plannedRoute: [d.home] }
+        : d,
+    ),
+  }
+}
+
+/** 批量召回所有任务机。纯函数。 */
+export function recallMissionDrones(state: FleetState): FleetState {
+  let next = state
+  for (const d of state.drones) {
+    if (d.mission !== 'patrol') next = recallDrone(next, d.id)
+  }
+  return next
+}
+
 let deliverySeq = 0
 
 /** 从方舱起飞一架投送机，沿 waypoints（物资点 → 灾点 → 回舱）飞行。纯函数。 */

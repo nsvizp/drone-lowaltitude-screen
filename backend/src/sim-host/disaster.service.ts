@@ -19,7 +19,7 @@ import {
   type SituationState,
   type SituationSummary,
 } from '../../../shared/sim/situation'
-import { mulberry32, type FleetState } from '../../../shared/sim/drone-sim'
+import { mulberry32, recallMissionDrones, type FleetState } from '../../../shared/sim/drone-sim'
 import { createEmergencyData } from '../../../shared/sim/emergency-data'
 import { PrismaService } from '../prisma.service'
 import { EventBus } from './event-bus'
@@ -199,6 +199,9 @@ export class DisasterService implements OnModuleInit {
       }).catch(() => undefined)
     }
     const delivered = this.situation?.deliveredPacks ?? 0
+    // 撤回全部任务机（勘测/投送/增援 → 返航归舱），清掉地图上的任务航线
+    const missionDrones = this.fleet.drones.filter((d) => d.mission !== 'patrol').length
+    this.fleet.recallAll()
     this.flood = null
     this.plan = null
     this.situation = null
@@ -209,8 +212,8 @@ export class DisasterService implements OnModuleInit {
     this.prevLegs = new Map()
     this.recordedDrops.clear()
     this.surveyArrivedAnnounced = false
-    this.log.pushFeed('disaster', '洪灾演练结束，灾情解除（累计投送 ' + delivered + ' 件物资）')
-    this.log.pushNode('演练结束', '灾情解除 · 累计投送 ' + delivered + ' 件')
+    this.log.pushFeed('disaster', '洪灾演练结束，灾情解除（累计投送 ' + delivered + ' 件物资，' + missionDrones + ' 架任务机返航）')
+    this.log.pushNode('演练结束', '灾情解除 · 累计投送 ' + delivered + ' 件 · ' + missionDrones + ' 架任务机返航')
     this.broadcastIfChanged()
     return this.getState()
   }

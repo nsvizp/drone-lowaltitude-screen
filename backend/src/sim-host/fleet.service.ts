@@ -5,6 +5,7 @@ import {
   createShanghaiRoutes,
   divertDrone,
   launchDrone,
+  recallMissionDrones,
   type DroneState,
   type FleetState,
   type LaunchOptions,
@@ -55,6 +56,11 @@ export class FleetService implements OnModuleInit, OnModuleDestroy {
 
   launch(opts: LaunchOptions): void {
     this.fleet = launchDrone(this.fleet, opts)
+  }
+
+  /** 演练结束：召回所有任务机返航归舱 */
+  recallAll(): void {
+    this.fleet = recallMissionDrones(this.fleet)
   }
 
   get drones(): DroneState[] {
