@@ -42,3 +42,56 @@ model LoginAttempt {
   @@index([username, createdAt])
   @@map("login_attempts")
 }
+// ---------- 飞行记录（接口2 数据源） ----------
+model FlightRecord {
+  id          Int    @id
+  name        String
+  routeId     Int    @map("route_id")
+  routeName   String @map("route_name")
+  flyerId     Int    @map("flyer_id")
+  flyerName   String @map("flyer_name")
+  shelterId   Int    @map("shelter_id")
+  shelterName String @map("shelter_name")
+  createTime  String @map("create_time")
+
+  @@map("flight_records")
+}
+
+// ---------- 台账 ----------
+model Warehouse {
+  id       Int    @id
+  name     String @unique
+  org      String
+  items    String
+  stock    Int
+  capacity Int
+
+  @@map("warehouses")
+}
+
+model Shelter {
+  id          Int    @id
+  name        String
+  lng         Float
+  lat         Float
+  spareDrones Int    @map("spare_drones")
+
+  @@map("shelters")
+}
+
+model Flyer {
+  id          Int    @id
+  name        String
+  lastMission String @map("last_mission")
+
+  @@map("flyers")
+}
+
+// ---------- 聚合快照（接口1/3/4/5 数据源；真实业务接入后替换为实时聚合） ----------
+model StatFeed {
+  key       String   @id
+  payload   String
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("stat_feeds")
+}

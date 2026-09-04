@@ -3,14 +3,19 @@ import PanelCard from '@/components/PanelCard.vue'
 import { useEventLog, type FeedKind } from '@/composables/event-log'
 import { useDrones } from '@/composables/useDrones'
 import { useDisaster } from '@/composables/useDisaster'
-import { buildDispatchRows, buildWarehouseRows } from '@/sim/dispatch-board'
-import { computed } from 'vue'
+import { buildDispatchRows, buildWarehouseRows, type WarehouseRow } from '@/sim/dispatch-board'
+import { openWarehouses } from '@/api'
+import { computed, onMounted, ref } from 'vue'
 
 // ---------- 物资仓储（静态台账） + 物资调度（实时机队） ----------
 const { drones } = useDrones()
 const { situation } = useDisaster()
 
-const warehouses = buildWarehouseRows()
+// 仓储台账：后端接口优先，失败回退本地静态台账
+const warehouses = ref<WarehouseRow[]>(buildWarehouseRows())
+onMounted(async () => {
+  warehouses.value = await openWarehouses(buildWarehouseRows())
+})
 
 const dispatch = computed(() =>
   buildDispatchRows({ drones: drones.value, tickCount: 0 }, situation.value),
