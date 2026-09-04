@@ -22,16 +22,17 @@
 ## 快速开始
 
 ```bash
-# 1. 后端（配置/认证/数据库 — 高德 Key 存在 SQLite，不再硬编码）
-cd backend && pnpm install --ignore-workspace
-pnpm exec prisma migrate dev   # 建库（backend/data/app.db）
-pnpm exec tsx prisma/seed.ts   # 种子：admin 账号 + 高德 Key 配置
+# 1. 后端（数据库文件已随仓库提交，clone 即用，无需建库/种子）
+cd backend && pnpm install --ignore-workspace   # postinstall 自动生成 Prisma Client
 pnpm dev                       # http://127.0.0.1:3000/api
 
 # 2. 前端（另开终端，/api 自动代理到 3000）
 pnpm install
 pnpm dev                       # http://127.0.0.1:5173
 ```
+
+> 数据库为 SQLite 单文件 backend/data/app.db（已提交，含 admin 账号/高德 Key/台账种子数据）；
+> 如需重置：删除该文件后执行 pnpm exec prisma migrate dev && pnpm seed。
 
 > 配置优先级：后端 /api/config/public（数据库 system_config 表）> .env.local（后端未启动时的离线兜底）。
 > 高德 Key：到 https://lbs.amap.com/ 申请「Web端(JS API)」类型 Key 与安全密钥，写入数据库或 .env.local 均可；
