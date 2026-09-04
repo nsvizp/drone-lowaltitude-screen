@@ -75,6 +75,18 @@ export function buildConclusionNote(summary: { deliveredPacks: number } | null, 
   }]
 }
 
+/** 草稿卡确认入口状态：
+ *  ai-dialog = 大模型选案（只在 AI 推演卡确认，草稿卡不出按钮）
+ *  locked    = 算法兜底但推演未播完（锁定）
+ *  ready     = 算法兜底且推演完成（可确认下达） */
+export function draftConfirmState(
+  planSource: 'ai' | 'algorithm' | null,
+  aiPhase: 'idle' | 'running' | 'done',
+): 'ai-dialog' | 'locked' | 'ready' {
+  if (planSource === 'ai') return 'ai-dialog'
+  return aiPhase === 'done' ? 'ready' : 'locked'
+}
+
 export interface AiScriptInput {
   flood: FloodEvent | null
   /** 已生效调配单 */

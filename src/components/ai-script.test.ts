@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildAiScript, buildConclusionNote, buildReinforceNote, buildSituationNote, SCENE } from './ai-script'
+import { buildAiScript, buildConclusionNote, buildReinforceNote, buildSituationNote, draftConfirmState, SCENE } from './ai-script'
 import type { DispatchPlan, FloodEvent } from '@/sim/disaster'
 
 const flood: FloodEvent = { id: 'f', kind: 'fire', position: [121.5, 31.2], severity: 2, createdTick: 0 }
@@ -90,6 +90,17 @@ describe('AI 卡生命周期幕（情况分析/二次调度/结论）', () => {
     expect(all).toContain('800')
     expect(all).toContain('4')
     expect(paras[0].tag).toContain('结论')
+  })
+
+  it('draftConfirmState：大模型选案 → 不出现算法确认按钮', () => {
+    expect(draftConfirmState('ai', 'done')).toBe('ai-dialog')
+    expect(draftConfirmState('ai', 'running')).toBe('ai-dialog')
+  })
+
+  it('draftConfirmState：算法兜底 → 推演中锁定，完成后可确认', () => {
+    expect(draftConfirmState('algorithm', 'running')).toBe('locked')
+    expect(draftConfirmState('algorithm', 'idle')).toBe('locked')
+    expect(draftConfirmState('algorithm', 'done')).toBe('ready')
   })
 
   it('空态势事件时给等待提示', () => {

@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useDisaster } from '@/composables/useDisaster'
 import { useDraggable } from '@/composables/useDraggable'
+import { aiReasoningPhase } from './ai-stage'
 import { buildAiScript, buildConclusionNote, buildReinforceNote, buildSituationNote, type AiParagraph } from './ai-script'
 
 const rootRef = ref<HTMLElement | null>(null)
@@ -98,6 +99,7 @@ async function runScript(): Promise<void> {
   if (!playing.value) return
   phase.value = 'done'
   playing.value = false
+  aiReasoningPhase.value = 'done'
 }
 
 function stop(): void {
@@ -132,6 +134,7 @@ function start(): void {
   output.value = []
   phase.value = 'idle'
   confirmOpen.value = false
+  aiReasoningPhase.value = 'running'
   const begin = () => { playing.value = true; void runScript() }
   if (disaster.flood.value) { begin(); return }
   const unwatch = watch(disaster.flood, (f) => { if (f) { unwatch(); begin() } })
@@ -188,6 +191,7 @@ watch(() => disaster.evalResult.value?.needed, (needed) => {
 
 /** 第四幕·结论：灾情解除（flood 清空且曾执行过调配）时汇总 */
 watch(() => disaster.flood.value, (f, old) => {
+  if (!f && old) aiReasoningPhase.value = 'idle'
   if (!f && old && disaster.plan.value === null && output.value.length > 0) {
     void playStage(buildConclusionNote(disaster.summary.value, lastMissionDrones))
     lastMissionDrones = 0
