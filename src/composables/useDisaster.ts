@@ -60,9 +60,13 @@ function connect(): void {
 export function useDisaster() {
   connect()
 
-  /** 模拟洪灾（服务端生成灾点并执行调配） */
-  const simulateFlood = () => {
-    void fetch('/api/disaster/simulate', { method: 'POST' }).catch(() => undefined)
+  /** 模拟灾情（服务端生成灾点并执行调配）：flood 洪灾 / debris 泥石流 */
+  const simulateFlood = (type: 'flood' | 'debris' = 'flood') => {
+    void fetch('/api/disaster/simulate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type }),
+    }).catch(() => undefined)
   }
 
   /** 执行二次调配增援 */

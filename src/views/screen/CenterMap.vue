@@ -390,14 +390,16 @@ watch(disaster.flood, (f) => {
   const AMap = window.AMap
   if (floodOverlays.length) { map.remove(floodOverlays); floodOverlays = [] }
   if (!f) return
+  const isDebris = f.kind === 'debris'
+  const disasterColor = isDebris ? '#c08a3e' : '#ff3b3b'
   const circle = new AMap.Circle({
     map, center: f.position, radius: 400 * f.severity,
-    strokeColor: '#ff3b3b', strokeWeight: 2, strokeOpacity: 0.8,
-    fillColor: '#ff3b3b', fillOpacity: 0.12,
+    strokeColor: disasterColor, strokeWeight: 2, strokeOpacity: 0.8,
+    fillColor: disasterColor, fillOpacity: 0.12,
   })
   const pulse = new AMap.Marker({
     map, position: f.position,
-    content: '<div class="flood-pulse"><span>🌊</span></div>',
+    content: '<div class="flood-pulse"><span>' + (isDebris ? '⛰️' : '🌊') + '</span></div>',
     offset: new AMap.Pixel(-16, -16),
   })
   floodOverlays = [circle, pulse]
@@ -476,9 +478,16 @@ onBeforeUnmount(() => {
       <button
         class="center-map__disaster"
         :disabled="disaster.active.value || !backendOnline"
-        @click="disaster.simulateFlood"
+        @click="disaster.simulateFlood('flood')"
       >
         {{ disaster.active.value ? '🔴 抢险进行中…' : '⚠ 模拟洪灾' }}
+      </button>
+      <button
+        class="center-map__disaster center-map__disaster--debris"
+        :disabled="disaster.active.value || !backendOnline"
+        @click="disaster.simulateFlood('debris')"
+      >
+        {{ disaster.active.value ? '🔴 抢险进行中…' : '⛰ 模拟泥石流' }}
       </button>
       <button
         v-if="disaster.active.value"
@@ -661,6 +670,14 @@ onBeforeUnmount(() => {
 
     &:hover:not(:disabled) { background: rgba(255, 59, 59, 0.3); }
     &:disabled { opacity: 0.7; cursor: default; }
+
+    &--debris {
+      color: #e8c79b;
+      background: rgba(192, 138, 62, 0.15);
+      border-color: rgba(192, 138, 62, 0.5);
+
+      &:hover:not(:disabled) { background: rgba(192, 138, 62, 0.3); }
+    }
 
     &--resolve {
       color: #9be89b;

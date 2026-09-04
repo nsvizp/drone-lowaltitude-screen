@@ -108,14 +108,14 @@ describe('planFloodDispatch 调配引擎', () => {
 
 describe('B1 pickShelters 增援方舱按距离排序', () => {
   it('灾点在 3号方舱旁时：最近=3号，次近=1号（不是写死的 2号）', () => {
-    const flood = { id: 'f', position: [121.5950, 31.2050] as [number, number], severity: 2 as const, createdTick: 0 }
+    const flood = { id: 'f', kind: 'flood' as const, position: [121.5950, 31.2050] as [number, number], severity: 2 as const, createdTick: 0 }
     const picked = pickShelters(SHELTERS, flood, 2)
     expect(picked[0].name).toBe('3号方舱')
     expect(picked[1].name).toBe('1号方舱')
   })
 
   it('无备用机的方舱不参与增援挑选', () => {
-    const flood = { id: 'f', position: [121.5950, 31.2050] as [number, number], severity: 2 as const, createdTick: 0 }
+    const flood = { id: 'f', kind: 'flood' as const, position: [121.5950, 31.2050] as [number, number], severity: 2 as const, createdTick: 0 }
     const noSpare3 = SHELTERS.map((s) => (s.id === 4003 ? { ...s, spareDrones: 0 } : s))
     const picked = pickShelters(noSpare3, flood, 2)
     expect(picked[0].name).toBe('1号方舱')

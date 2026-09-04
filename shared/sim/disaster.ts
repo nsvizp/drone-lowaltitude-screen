@@ -2,12 +2,28 @@ import { distanceMeters, EMERGENCY_SPEED, type DroneState, type FleetState, type
 import type { EmergencyPoint } from './emergency-data'
 import type { BBox } from './emergency-data'
 
+/** 灾种：洪灾 / 泥石流 */
+export type DisasterKind = 'flood' | 'debris'
+
+export const DISASTER_NAME: Record<DisasterKind, string> = {
+  flood: '洪灾',
+  debris: '泥石流',
+}
+
+/** 灾种匹配的物资关键词 */
+export const DISASTER_SUPPLY_KEYWORDS: Record<DisasterKind, string[]> = {
+  flood: ['饮用水', '食品', '救生', '冲锋舟', '帐篷', '被褥'],
+  debris: ['破拆', '绳索', '担架', '急救', '钢', '防护'],
+}
+
 export interface FloodEvent {
   id: string
   position: LngLat
   /** 严重等级 1~3 */
   severity: 1 | 2 | 3
   createdTick: number
+  /** 灾种（历史数据兼容：缺省视为洪灾） */
+  kind: DisasterKind
 }
 
 export interface ShelterInfo {
@@ -25,8 +41,8 @@ export interface FlyerInfo {
   lastMission: string
 }
 
-/** 洪灾灾种匹配的物资关键词（优先级高于距离） */
-export const FLOOD_SUPPLY_KEYWORDS = ['饮用水', '食品', '救生', '冲锋舟', '帐篷', '被褥']
+/** @deprecated 兼容引用：等价于 DISASTER_SUPPLY_KEYWORDS.flood */
+export const FLOOD_SUPPLY_KEYWORDS = DISASTER_SUPPLY_KEYWORDS.flood
 
 /** 勘测机最低电量阈值（%） */
 export const SURVEY_MIN_BATTERY = 50
@@ -70,10 +86,11 @@ export interface DispatchPlan {
   warnings: string[]
 }
 
-/** 随机生成一处洪灾（落在给定范围内，通常用无人机航线包围盒） */
-export function createFloodEvent(rng: () => number, bbox: BBox, tick: number): FloodEvent {
+/** 随机生成一处灾情（落在给定范围内，通常用无人机航线包围盒） */
+export function createDisasterEvent(rng: () => number, bbox: BBox, tick: number, kind: DisasterKind = 'flood'): FloodEvent {
   return {
-    id: 'flood-' + tick,
+    id: kind + '-' + tick,
+    kind,
     position: [
       bbox.minLng + rng() * (bbox.maxLng - bbox.minLng),
       bbox.minLat + rng() * (bbox.maxLat - bbox.minLat),
@@ -83,10 +100,16 @@ export function createFloodEvent(rng: () => number, bbox: BBox, tick: number): F
   }
 }
 
+/** @deprecated 兼容旧调用：等价于 createDisasterEvent(..., 'flood') */
+export function createFloodEvent(rng: () => number, bbox: BBox, tick: number): FloodEvent {
+  return createDisasterEvent(rng, bbox, tick, 'flood')
+}
+
 /** 洪灾物资点打分：灾种关键词匹配优先，其次按距离 */
 export function pickSupplySite(supplies: EmergencyPoint[], flood: FloodEvent): EmergencyPoint | null {
   if (supplies.length === 0) return null
-  const matched = supplies.filter((s) => FLOOD_SUPPLY_KEYWORDS.some((k) => s.detail.includes(k)))
+  const keywords = DISASTER_SUPPLY_KEYWORDS[flood.kind ?? 'flood']
+  const matched = supplies.filter((s) => keywords.some((k) => s.detail.includes(k)))
   const pool = matched.length > 0 ? matched : supplies
   return [...pool].sort(
     (a, b) => distanceMeters(a.position, flood.position) - distanceMeters(b.position, flood.position),

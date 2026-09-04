@@ -6,7 +6,8 @@ import { useDraggable, useResizable } from '@/composables/useDraggable'
 import { formatHudTelemetry, getVideoSource, signalBars } from '@/sim/video'
 
 const { drones } = useDrones()
-const { videoDroneId, closeVideo } = useDisaster()
+const disaster = useDisaster()
+const { videoDroneId, closeVideo } = disaster
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const rootRef = ref<HTMLElement | null>(null)
@@ -40,13 +41,24 @@ const scene = computed(() => {
   return src.type === 'simulated' ? src.scene : ('city' as const)
 })
 
+/** 灾情勘测实况：勘测机在场（灾情激活且该机为勘测任务）时切换到真实航拍视频 */
+const liveSrc = computed(() => {
+  const d = drone.value
+  const f = disaster.flood.value
+  if (!d || !f || d.mission !== 'survey') return null
+  return '/videos/' + (f.kind === 'debris' ? 'debris' : 'flood') + '.mp4'
+})
+const disasterLabel = computed(() => (disaster.flood.value?.kind === 'debris' ? '⛰ 泥石流' : '🌊 洪灾'))
+/** HUD 遥测行（真实视频模式下以 DOM 覆盖层呈现，与画布模式一致） */
+const hudLines = computed(() => (drone.value ? formatHudTelemetry(drone.value) : []))
+
 let raf = 0
 let frame = 0
 
 function draw() {
   const canvas = canvasRef.value
   const d = drone.value
-  if (!canvas || !d || signalLost.value) { raf = requestAnimationFrame(draw); return }
+  if (!canvas || !d || signalLost.value || liveSrc.value) { raf = requestAnimationFrame(draw); return }
   const ctx = canvas.getContext('2d')
   if (!ctx) return
   const W = canvas.width
@@ -171,11 +183,30 @@ watch(videoDroneId, () => { frame = 0 })
       <button class="video-feed__close" @click="closeVideo">✕</button>
     </div>
     <div class="video-feed__screen">
-      <canvas ref="canvasRef" class="video-feed__canvas" width="352" height="198" />
+      <video
+        v-if="liveSrc"
+        :key="liveSrc"
+        :src="liveSrc"
+        class="video-feed__video"
+        autoplay
+        muted
+        loop
+        playsinline
+      />
+      <canvas v-show="!liveSrc" ref="canvasRef" class="video-feed__canvas" width="352" height="198" />
+      <!-- 真实视频模式的 HUD 覆盖层（遥测/准星/REC/时间戳） -->
+      <div v-if="liveSrc" class="video-feed__hud">
+        <div class="video-feed__hud-telemetry">
+          <div v-for="(line, i) in hudLines" :key="i">{{ line }}</div>
+        </div>
+        <div class="video-feed__hud-cross">+</div>
+        <div class="video-feed__hud-rec">● REC</div>
+        <div class="video-feed__hud-clock">{{ new Date().toLocaleTimeString('zh-CN', { hour12: false }) }}</div>
+      </div>
       <div v-if="signalLost" class="video-feed__lost">📡 信号丢失 · 无人机已归舱</div>
     </div>
     <div class="video-feed__foot">
-      {{ scene === 'flood' ? '🌊 洪灾勘测画面（模拟图传）' : '🏙 巡逻画面（模拟图传）' }} · {{ drone.taskName }}
+      {{ liveSrc ? disasterLabel + ' 勘测实况（航拍图传）' : (scene === 'flood' ? '🌊 洪灾勘测画面（模拟图传）' : '🏙 巡逻画面（模拟图传）') }} · {{ drone.taskName }}
     </div>
     <div ref="resizeGripRef" class="video-feed__resize" title="拖动调整大小" />
   </div>
@@ -238,6 +269,56 @@ watch(videoDroneId, () => { frame = 0 })
   &__screen { position: relative; }
 
   &__canvas { display: block; width: 100%; }
+
+  &__video { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: #000; }
+
+  &__hud {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    font-family: monospace;
+  }
+
+  &__hud-telemetry {
+    position: absolute;
+    top: 6px;
+    left: 10px;
+    font-size: 11px;
+    line-height: 14px;
+    color: #00e5ff;
+    text-shadow: 0 0 3px rgba(0, 0, 0, 0.9);
+  }
+
+  &__hud-cross {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 22px;
+    color: rgba(0, 229, 255, 0.8);
+    text-shadow: 0 0 4px rgba(0, 0, 0, 0.9);
+  }
+
+  &__hud-rec {
+    position: absolute;
+    top: 6px;
+    right: 10px;
+    font-size: 11px;
+    color: #ff6b6b;
+    animation: rec-blink 1s step-end infinite;
+    text-shadow: 0 0 3px rgba(0, 0, 0, 0.9);
+  }
+
+  &__hud-clock {
+    position: absolute;
+    right: 10px;
+    bottom: 6px;
+    font-size: 11px;
+    color: #00e5ff;
+    text-shadow: 0 0 3px rgba(0, 0, 0, 0.9);
+  }
+
+  @keyframes rec-blink { 50% { opacity: 0.2; } }
 
   &__lost {
     position: absolute;

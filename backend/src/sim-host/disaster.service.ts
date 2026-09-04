@@ -1,8 +1,10 @@
 import { Injectable, OnModuleInit } from '@nestjs/common'
 import {
-  createFloodEvent,
+  createDisasterEvent,
+  DISASTER_NAME,
   pickShelters,
   planFloodDispatch,
+  type DisasterKind,
   type DispatchPlan,
   type FloodEvent,
   type FlyerInfo,
@@ -102,12 +104,13 @@ export class DisasterService implements OnModuleInit {
     }
   }
 
-  /** 模拟洪灾：随机灾点 → 调配引擎 → 改派勘测 + 方舱起飞投送 */
-  async simulateFlood(): Promise<DisasterSnapshot> {
+  /** 模拟灾情（洪灾/泥石流）：随机灾点 → 调配引擎 → 改派勘测 + 方舱起飞投送 */
+  async simulateFlood(kind: DisasterKind = 'flood'): Promise<DisasterSnapshot> {
     const currentDrones = this.fleet.drones
     if (currentDrones.length === 0) return this.getState()
     const rng = mulberry32(Date.now() % 100000)
-    const floodEvent = createFloodEvent(rng, FLOOD_AREA, 0)
+    const floodEvent = createDisasterEvent(rng, FLOOD_AREA, 0, kind)
+    const dName = DISASTER_NAME[kind]
     // 物资点 = 仓储台账（真实坐标 + 实时库存）；为空时回退模拟数据
     const warehouses = await this.prisma.warehouse.findMany({ orderBy: { id: 'asc' } })
     const supplies = warehouses.length > 0
@@ -131,7 +134,7 @@ export class DisasterService implements OnModuleInit {
         this.fleet.launch({
           home: d.legs[0],
           waypoints: d.legs.slice(1),
-          taskName: '洪灾物资投送 · ' + d.supplySiteName,
+          taskName: dName + '物资投送 · ' + d.supplySiteName,
           mission: 'delivery',
         })
       }
@@ -154,9 +157,9 @@ export class DisasterService implements OnModuleInit {
     this.disasterId = rec.id
 
     // 事件日志：灾情节点 + 初次调配节点 + 报警动态
-    this.log.pushNode('⚠ 灾情发生', SEVERITY_TEXT[floodEvent.severity] + '洪灾 · ' + floodEvent.position[0].toFixed(4) + ', ' + floodEvent.position[1].toFixed(4), this.disasterId)
+    this.log.pushNode('⚠ 灾情发生', SEVERITY_TEXT[floodEvent.severity] + dName + ' · ' + floodEvent.position[0].toFixed(4) + ', ' + floodEvent.position[1].toFixed(4), this.disasterId)
     this.log.pushNode('初次调配下达', dispatchPlan.survey.length + ' 架勘测机改派 · ' + (dispatchPlan.delivery ? dispatchPlan.delivery.shelterName + ' ' + dispatchPlan.delivery.droneCount + ' 架投送 ' + dispatchPlan.delivery.droneCount * PACKS_PER_SORTIE + ' 件物资' : '无投送'), this.disasterId)
-    this.log.pushFeed('disaster', SEVERITY_TEXT[floodEvent.severity] + '洪灾报警，抢险勘测与物资投送启动')
+    this.log.pushFeed('disaster', SEVERITY_TEXT[floodEvent.severity] + dName + '报警，抢险勘测与物资投送启动')
 
     this.broadcastIfChanged()
     return this.getState()
@@ -225,7 +228,7 @@ export class DisasterService implements OnModuleInit {
     this.prevLegs = new Map()
     this.recordedDrops.clear()
     this.surveyArrivedAnnounced = false
-    this.log.pushFeed('disaster', '洪灾演练结束，灾情解除（累计投送 ' + delivered + ' 件物资，' + missionDrones + ' 架任务机返航）')
+    this.log.pushFeed('disaster', '演练结束，灾情解除（累计投送 ' + delivered + ' 件物资，' + missionDrones + ' 架任务机返航）')
     this.log.pushNode('演练结束', '灾情解除 · 累计投送 ' + delivered + ' 件 · ' + missionDrones + ' 架任务机返航')
     this.broadcastIfChanged()
     return this.getState()

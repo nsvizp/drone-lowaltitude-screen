@@ -1,4 +1,4 @@
-import { Controller, Get, Post } from '@nestjs/common'
+import { Body, Controller, Get, Post } from '@nestjs/common'
 import { DisasterService } from './disaster.service'
 import { EventLogService } from './event-log.service'
 
@@ -9,10 +9,10 @@ export class SimHostController {
     private readonly log: EventLogService,
   ) {}
 
-  /** 触发洪灾模拟（前端「模拟洪灾」按钮） */
+  /** 触发灾情模拟（前端「模拟洪灾/泥石流」按钮；body.type = flood | debris） */
   @Post('disaster/simulate')
-  simulate() {
-    return this.disaster.simulateFlood()
+  simulate(@Body('type') type?: 'flood' | 'debris') {
+    return this.disaster.simulateFlood(type === 'debris' ? 'debris' : 'flood')
   }
 
   /** 执行二次增援（前端「执行增援」按钮） */

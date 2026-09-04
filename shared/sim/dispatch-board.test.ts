@@ -19,7 +19,7 @@ describe('buildWarehouseRows 物资仓储', () => {
 })
 
 describe('buildDispatchRows 物资调度', () => {
-  const flood: FloodEvent = { id: 'f', position: [121.59, 31.19], severity: 2, createdTick: 0 }
+  const flood: FloodEvent = { id: 'f', kind: 'flood', position: [121.59, 31.19], severity: 2, createdTick: 0 }
 
   it('无投送任务时为空、在途 0', () => {
     const fleet = createFleet(routes, 4, mulberry32(61))
