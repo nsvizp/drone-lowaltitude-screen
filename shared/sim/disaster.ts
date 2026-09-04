@@ -161,12 +161,20 @@ export function pickRestedFlyers(flyers: FlyerInfo[], n: number): FlyerInfo[] {
  * 1. 勘测组：在飞、巡逻中、电量 ≥ 50% 的无人机按距灾点升序取 2 架改飞
  * 2. 投送组：距灾点最近方舱出新机，物资点按灾种匹配>距离选择，飞手按休整充分度指派
  */
+/** 大模型选案注入：任一字段无效即忽略该项，回退自动选择 */
+export interface DispatchPicks {
+  surveyDroneIds?: string[]
+  supplySiteId?: string
+  shelterId?: number
+}
+
 export function planFloodDispatch(
   fleet: FleetState,
   shelters: ShelterInfo[],
   flyers: FlyerInfo[],
   supplies: EmergencyPoint[],
   flood: FloodEvent,
+  picks?: DispatchPicks,
 ): DispatchPlan {
   const warnings: string[] = []
 
@@ -175,7 +183,13 @@ export function planFloodDispatch(
     .filter((d: DroneState) => d.status === 'flying' && d.mission === 'patrol' && d.batteryPct >= SURVEY_MIN_BATTERY)
     .map((d) => ({ d, dist: distanceMeters([d.lng, d.lat], flood.position) }))
     .sort((a, b) => a.dist - b.dist)
-  const survey: SurveyAssignment[] = candidates.slice(0, SURVEY_TEAM_SIZE).map(({ d, dist }) => ({
+  // 大模型指定勘测机（按给定顺序），未指定的位置由自动最近补齐
+  const picked = (picks?.surveyDroneIds ?? [])
+    .map((id) => candidates.find((c) => c.d.id === id))
+    .filter((c): c is (typeof candidates)[number] => !!c)
+  const pickedIds = new Set(picked.map((c) => c.d.id))
+  const ordered = [...picked, ...candidates.filter((c) => !pickedIds.has(c.d.id))]
+  const survey: SurveyAssignment[] = ordered.slice(0, SURVEY_TEAM_SIZE).map(({ d, dist }) => ({
     droneId: d.id,
     droneName: d.name,
     flyerNote: '原飞手保持操控',
@@ -189,11 +203,13 @@ export function planFloodDispatch(
 
   // --- 投送组 ---
   let delivery: DeliveryAssignment | null = null
-  const shelter = pickShelters(shelters, flood, 1)[0]
+  const shelter = (picks?.shelterId != null && shelters.find((s) => s.id === picks.shelterId))
+    || pickShelters(shelters, flood, 1)[0]
   if (!shelter) {
     warnings.push('无机库备用机可用，无法组织投送')
   } else {
-    const site = pickSupplySite(supplies, flood)
+    const site = (picks?.supplySiteId && supplies.find((s) => s.id === picks.supplySiteId))
+      || pickSupplySite(supplies, flood)
     if (!site) {
       warnings.push('无可用物资点')
     } else {

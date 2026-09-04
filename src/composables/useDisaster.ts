@@ -26,6 +26,8 @@ interface DisasterSnapshot {
   summary: SituationSummary | null
   eval: ReinforcementEval | null
   reinforced: boolean
+  planSource: 'ai' | 'algorithm' | null
+  aiReasoning: string | null
 }
 
 // ---------- 模块级灾情状态（镜像服务端权威状态） ----------
@@ -36,6 +38,8 @@ const situation = ref<SituationState | null>(null)
 const summaryRef = ref<SituationSummary | null>(null)
 const evalResult = ref<ReinforcementEval | null>(null)
 const reinforced = ref(false)
+const planSource = ref<'ai' | 'algorithm' | null>(null)
+const aiReasoning = ref<string | null>(null)
 const videoDroneId = ref<string | null>(null)
 
 let connected = false
@@ -48,6 +52,8 @@ function applySnapshot(s: DisasterSnapshot): void {
   summaryRef.value = s.summary
   evalResult.value = s.eval
   reinforced.value = s.reinforced
+  planSource.value = s.planSource ?? null
+  aiReasoning.value = s.aiReasoning ?? null
 }
 
 function connect(): void {
@@ -93,12 +99,12 @@ export function useDisaster() {
   const closeVideo = () => { videoDroneId.value = null }
 
   // 调试/验收钩子（Playwright 探针）
-  ;(window as unknown as Record<string, unknown>).__DISASTER = { flood, plan, pendingPlan, situation, summaryRef, evalResult, openVideo, closeVideo }
+  ;(window as unknown as Record<string, unknown>).__DISASTER = { flood, plan, pendingPlan, situation, summaryRef, evalResult, planSource, aiReasoning, openVideo, closeVideo }
 
   const active = computed(() => flood.value !== null)
 
   return {
-    flood, plan, pendingPlan, situation, summary: summaryRef, evalResult, reinforced, active, videoDroneId,
+    flood, plan, pendingPlan, situation, summary: summaryRef, evalResult, reinforced, active, videoDroneId, planSource, aiReasoning,
     simulateFlood, executeDispatch, executeReinforcement, resolveDisaster, openVideo, closeVideo,
   }
 }

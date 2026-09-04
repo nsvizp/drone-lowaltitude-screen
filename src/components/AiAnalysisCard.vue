@@ -1,22 +1,17 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useDisaster } from '@/composables/useDisaster'
-import { useDrones } from '@/composables/useDrones'
 import { useDraggable } from '@/composables/useDraggable'
-import { createEmergencyData } from '@/sim/emergency-data'
-import { mulberry32 } from '@/sim/drone-sim'
+import { buildAiScript, buildConclusionNote, buildReinforceNote, buildSituationNote, type AiParagraph } from './ai-script'
 
 const rootRef = ref<HTMLElement | null>(null)
 const dragHandleRef = ref<HTMLElement | null>(null)
 useDraggable(rootRef, dragHandleRef)
 
-const { drones } = useDrones()
 const disaster = useDisaster()
 // 待指挥确认的调配草稿（AI 推演完成后由后端下发，用于确认弹框预览）
 const pendingPlan = disaster.pendingPlan
 const KIND_NAME: Record<string, string> = { flood: '洪灾', debris: '泥石流', fire: '火灾' }
-// 应急资源（物资/人员/车辆）模拟数据，与地图图层同源（同一 seed）
-const emergencyData = reactive(createEmergencyData(mulberry32(20260903)))
 
 const collapsed = ref(true)
 const playing = ref(false)
@@ -25,112 +20,16 @@ const thinking = ref<string[]>([])
 const output = ref<{ tag: string; text: string }[]>([])
 const confirmOpen = ref(false)
 
-interface AiParagraph { tag: string; text: string }
-
-/** 场景话术表：推演语言跟随灾种（洪灾/泥石流/火灾） */
-const SCENE = {
-  flood: {
-    name: '洪灾', icon: '🌊',
-    sensing: '识别洪峰过境信号，正在解算淹没范围…',
-    narrative: '周边低洼区域存在漫溢风险，需持续盯防水情变化',
-    supplyFocus: '饮用水与救生器材',
-    first: '优先投送饮用水与救生器材',
-    review: '勘测机每 30 分钟回传一轮水情复核画面',
-  },
-  debris: {
-    name: '泥石流', icon: '⛰️',
-    sensing: '解算坡体位移与泥石流通路，评估二次滑塌风险…',
-    narrative: '坡体存在二次滑塌风险，须严防救援通道被掩埋',
-    supplyFocus: '破拆工具与担架急救包',
-    first: '优先投送破拆工具与急救物资',
-    review: '勘测机每 30 分钟回传一轮坡体复核画面',
-  },
-  fire: {
-    name: '火灾', icon: '🔥',
-    sensing: '识别热异常信号与浓烟扩散方向，解算火势蔓延趋势…',
-    narrative: '火场存在复燃与蔓延风险，需持续监控风向变化',
-    supplyFocus: '防护装备与急救物资',
-    first: '优先投送防护装备与急救物资',
-    review: '勘测机每 30 分钟回传一轮火场复核画面',
-  },
-} as const
-
-/** 依据实时状态（灾情/物资/人员/车辆/机队）生成一整套推演脚本 */
+/** 初幕推演稿：与调配单同源；大模型研判原文（如有）作为首段展示 */
 function buildScript(): { think: string[]; paras: AiParagraph[] } {
-  const f = disaster.flood.value
-  const sum = disaster.summary.value
-  const scene = SCENE[f?.kind ?? 'flood']
-
-  const think: string[] = [
-    '正在建立灾情感知通道…',
-    scene.sensing,
-    '正在检索应急物资台账与库存余量…',
-    '正在评估救援人员与车辆出动状态…',
-    '正在规划无人机侦察与投送航线…',
-    '正在汇总生成综合处置建议…',
-  ]
-
-  const paras: AiParagraph[] = []
-
-  const sev = f ? 'ⅠⅡⅢ'[f.severity - 1] : 'Ⅱ'
-  const pos = f ? f.position[0].toFixed(3) + ', ' + f.position[1].toFixed(3) : '121.4203, 31.1623'
-  const delivered = sum ? sum.deliveredPacks : 0
-
-  paras.push({
-    tag: scene.icon + ' 灾情研判',
-    text:
-      '检测到' + scene.name + sev + '级灾害，灾点位于（' + pos + '）。' +
-      scene.narrative +
-      (delivered > 0 ? '；已累计投送应急物资 ' + delivered + ' 件' : '') + '。',
+  const { think, paras } = buildAiScript({
+    flood: disaster.flood.value,
+    plan: disaster.plan.value,
+    pendingPlan: disaster.pendingPlan.value,
+    deliveredPacks: disaster.summary.value?.deliveredPacks ?? 0,
   })
-
-  const supplies = emergencyData.supplies
-  const ready = supplies.filter((s) => s.status === '可用')
-  const top = (ready.length ? ready : supplies).slice(0, 3)
-  const supplyText = top.map((s) => s.name + '（' + s.detail + '）').join('；')
-  const gap = 40 + Math.floor(Math.random() * 40)
-  paras.push({
-    tag: '📦 物资评估',
-    text: '可用物资点：' + supplyText + '。经测算' + scene.supplyFocus + '缺口约 ' + gap + ' 件，建议优先从最近物资点调运并同步补库。',
-  })
-
-  const persons = emergencyData.personnel
-  const cnt = (s: string) => persons.filter((x) => x.status === s).length
-  paras.push({
-    tag: '👷 人员状态',
-    text: '救援力量统计：待命 ' + cnt('待命') + ' 组、备勤 ' + cnt('备勤') + ' 组、出勤中 ' + cnt('出勤中') + ' 组，均已按最小作战单元编成，可随时响应。',
-  })
-
-  const vehicles = emergencyData.vehicles
-  const readyV = vehicles.filter((x) => x.status !== '保养中').length
-  paras.push({
-    tag: '🚒 车辆状态',
-    text: '可调用应急车辆 ' + readyV + ' 台（消防/救护/指挥/运输等），其中 2 台物资运输车已装载待发，可保障第一批投送。',
-  })
-
-  const fleet = drones.value
-  let droneText: string
-  if (fleet.length > 0) {
-    const patrol = fleet.filter((d) => d.mission === 'patrol').length
-    const survey = fleet.filter((d) => d.mission === 'survey').length
-    const delivery = fleet.filter((d) => d.mission === 'delivery').length
-    const names = [...new Set(fleet.map((d) => d.routeName))].slice(0, 3).join('、')
-    droneText =
-      '机队共 ' + fleet.length + ' 架在飞：巡逻 ' + patrol + '、勘测 ' + survey + '、投送 ' + delivery + '。' +
-      (names ? '当前航线：' + names + '。' : '') + '勘测机已改飞灾点，投送机沿方舱→物资点→灾点航线空投。'
-  } else {
-    droneText = '机队共 8 架在飞：巡逻 5、勘测 2、投送 1。当前航线：外环巡逻航线 A1、黄浦江巡检航线 B2、应急投送航线 C3。勘测机已改飞灾点，投送机沿方舱→物资点→灾点航线空投。'
-  }
-  paras.push({ tag: '🚁 航线规划', text: droneText })
-
-  paras.push({
-    tag: '✅ 综合结论',
-    text:
-      '建议启动' + sev + '级应急响应：① ' + scene.first + '；② 增派 1 架勘测机扩大覆盖；' +
-      '③ 2 台运输车立即出发；④ ' + scene.review + '。' +
-      (pendingPlan.value ? '抢险调配方案已生成，请指挥确认后下达执行。' : ''),
-  })
-
+  const reasoning = disaster.aiReasoning?.value
+  if (reasoning) paras.unshift({ tag: '🧠 大模型研判', text: reasoning })
   return { think, paras }
 }
 
@@ -245,6 +144,58 @@ watch([phase, pendingPlan], () => {
   if (phase.value === 'done' && pendingPlan.value) confirmOpen.value = true
 })
 
+// ---------- 生命周期阶段机：初幕调度之后，AI 卡继续负责情况分析/二次调度分析/结论 ----------
+/** 追加播放一幕（不打断进行中的播放；排队追加） */
+let stageQueue: AiParagraph[][] = []
+let stagePlaying = false
+async function playStage(paras: AiParagraph[]): Promise<void> {
+  stageQueue.push(paras)
+  if (stagePlaying) return
+  stagePlaying = true
+  playing.value = true
+  phase.value = 'output'
+  while (stageQueue.length) {
+    const ps = stageQueue.shift()!
+    for (const p of ps) { await typeParagraph(p); await delay(300) }
+  }
+  playing.value = false
+  phase.value = 'done'
+  stagePlaying = false
+}
+
+let lastEventCount = 0
+let situationNoteCount = 0
+let lastMissionDrones = 0
+/** plan 存活期间记住任务机数（结论时 plan 已清空） */
+watch(() => disaster.plan.value, (p) => {
+  if (p) lastMissionDrones = p.survey.length + (p.delivery?.droneCount ?? 0) + (p.reinforcement?.drones.length ?? 0)
+})
+/** 第二幕·情况分析：确认执行后，现场事件每新增 3 条分析一次（最多 3 次，防刷屏） */
+watch(() => disaster.situation.value?.events.length ?? 0, (len) => {
+  if (!disaster.plan.value || !disaster.situation.value) return
+  if (len >= 1 && len - lastEventCount >= 1 && situationNoteCount < 3 && (len >= 3 * (situationNoteCount + 1) || (situationNoteCount === 0 && len >= 1))) {
+    lastEventCount = len
+    situationNoteCount++
+    const kindName = KIND_NAME[disaster.flood.value?.kind ?? 'flood']
+    void playStage(buildSituationNote(disaster.situation.value, kindName))
+  }
+})
+
+/** 第三幕·二次调度分析：评估触发增援时自动分析 */
+watch(() => disaster.evalResult.value?.needed, (needed) => {
+  if (needed && disaster.evalResult.value) void playStage(buildReinforceNote(disaster.evalResult.value))
+})
+
+/** 第四幕·结论：灾情解除（flood 清空且曾执行过调配）时汇总 */
+watch(() => disaster.flood.value, (f, old) => {
+  if (!f && old && disaster.plan.value === null && output.value.length > 0) {
+    void playStage(buildConclusionNote(disaster.summary.value, lastMissionDrones))
+    lastMissionDrones = 0
+    situationNoteCount = 0
+    lastEventCount = 0
+  }
+})
+
 function etaText(sec: number): string {
   return sec < 90 ? sec + ' 秒' : '约 ' + Math.round(sec / 60) + ' 分钟'
 }
@@ -273,6 +224,8 @@ onBeforeUnmount(() => { stop() })
   <div ref="rootRef" class="ai-card">
     <div ref="dragHandleRef" class="ai-card__bar ai-card__drag">
       <span class="ai-card__model">⋮⋮ 🧠 应急决策大模型</span>
+      <span v-if="disaster.planSource.value === 'ai'" class="ai-card__source ai-card__source--ai">大模型选案</span>
+      <span v-else-if="disaster.planSource.value === 'algorithm'" class="ai-card__source">算法兜底</span>
       <span class="ai-card__status" :data-phase="phase">{{ statusText }}</span>
       <button class="ai-card__btn" :title="playing ? '暂停' : '开始推演'" @click="togglePlay">
         {{ playing ? '⏸' : '▶' }}
@@ -411,6 +364,21 @@ onBeforeUnmount(() => { stop() })
     font-weight: 700;
     color: #eaf3ff;
     letter-spacing: 0.5px;
+  }
+
+  &__source {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    color: #7d9bc4;
+    background: rgba(125, 155, 196, 0.12);
+    border: 1px solid rgba(125, 155, 196, 0.35);
+
+    &--ai {
+      color: #b78cff;
+      background: rgba(183, 140, 255, 0.12);
+      border-color: rgba(183, 140, 255, 0.45);
+    }
   }
 
   &__status {

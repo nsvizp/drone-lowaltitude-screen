@@ -22,7 +22,8 @@ import {
   type SituationState,
   type SituationSummary,
 } from '../../../shared/sim/situation'
-import { mulberry32, recallMissionDrones, type FleetState } from '../../../shared/sim/drone-sim'
+import { distanceMeters, mulberry32, recallMissionDrones, type FleetState } from '../../../shared/sim/drone-sim'
+import { analyzeWithLlm, makeOpenAiClient, type LlmContext, type LlmClient } from './llm'
 import { createEmergencyData } from '../../../shared/sim/emergency-data'
 import { PrismaService } from '../prisma.service'
 import { EventBus } from './event-bus'
@@ -54,6 +55,10 @@ export interface DisasterSnapshot {
   plan: DispatchPlan | null
   /** 调配草稿：灾情感知后由推演生成，指挥确认（executeDispatch）后才生效执行 */
   pendingPlan: DispatchPlan | null
+  /** 选案来源：ai=大模型 / algorithm=算法兜底 */
+  planSource: 'ai' | 'algorithm' | null
+  /** 大模型研判原文（ai 来源时有值，AI 卡展示） */
+  aiReasoning: string | null
   situation: SituationState | null
   summary: SituationSummary | null
   eval: ReinforcementEval | null
@@ -67,6 +72,10 @@ export class DisasterService implements OnModuleInit {
   private disasterId: number | null = null
   private plan: DispatchPlan | null = null
   private pendingPlan: DispatchPlan | null = null
+  private planSource: 'ai' | 'algorithm' | null = null
+  private aiReasoning: string | null = null
+  /** 测试/外部注入的大模型客户端；为空时按 env（LLM_BASE_URL/LLM_API_KEY）创建 */
+  llmClient?: LlmClient
   private situation: SituationState | null = null
   private summary: SituationSummary | null = null
   private evalResult: ReinforcementEval | null = null
@@ -92,6 +101,8 @@ export class DisasterService implements OnModuleInit {
       flood: this.flood,
       plan: this.plan,
       pendingPlan: this.pendingPlan,
+      planSource: this.planSource,
+      aiReasoning: this.aiReasoning,
       situation: this.situation,
       summary: this.summary,
       eval: this.evalResult,
@@ -129,8 +140,25 @@ export class DisasterService implements OnModuleInit {
           org: w.org,
         }))
       : createEmergencyData(mulberry32(20260903)).supplies
+    // 大模型优先：给出研判与选案；down/超时/输出非法 → 算法兜底
+    const llmCtx: LlmContext = {
+      drones: currentDrones
+        .filter((d) => d.status === 'flying' && d.mission === 'patrol')
+        .map((d) => ({
+          id: d.id, name: d.name, batteryPct: d.batteryPct,
+          distanceKm: Math.round(distanceMeters([d.lng, d.lat], floodEvent.position) / 10) / 100,
+        })),
+      warehouses: supplies.map((s) => ({ id: s.id, name: s.name })),
+      shelters: SHELTERS.map((s) => ({ id: s.id, name: s.name })),
+    }
+    const client = this.llmClient ?? makeOpenAiClient(floodEvent, llmCtx)
+    const llmPlan = client ? await analyzeWithLlm({ client, timeoutMs: 8000 }, floodEvent, llmCtx) : null
+
     const fleetSnapshot: FleetState = { drones: currentDrones, tickCount: 0 }
-    const dispatchPlan = planFloodDispatch(fleetSnapshot, SHELTERS, FLYERS, supplies, floodEvent)
+    const dispatchPlan = planFloodDispatch(fleetSnapshot, SHELTERS, FLYERS, supplies, floodEvent,
+      llmPlan ? { surveyDroneIds: llmPlan.surveyDroneIds, supplySiteId: llmPlan.supplySiteId, shelterId: llmPlan.shelterId } : undefined)
+    this.planSource = llmPlan ? 'ai' : 'algorithm'
+    this.aiReasoning = llmPlan?.reasoning ?? null
 
     // 两段式：先感知 + 生成调配草稿，机队按兵不动；指挥确认（executeDispatch）后才执行
     this.flood = floodEvent
@@ -247,6 +275,8 @@ export class DisasterService implements OnModuleInit {
     this.flood = null
     this.plan = null
     this.pendingPlan = null
+    this.planSource = null
+    this.aiReasoning = null
     this.situation = null
     this.summary = null
     this.evalResult = null

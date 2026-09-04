@@ -57,6 +57,36 @@ describe('两段式灾情指挥（感知草稿 → 确认执行）', () => {
     expect(s.flood).toBeNull()
   })
 
+  it('大模型在线：pendingPlan 采用其选案 + planSource=ai + 推理原文', async () => {
+    const { svc, fleet } = makeService()
+    const firstTwo = fleet.drones.slice(0, 2).map((d) => d.id)
+    svc.llmClient = async () => ({ content: JSON.stringify({
+      reasoning: '火势向东蔓延，建议就近压制',
+      surveyDroneIds: firstTwo, supplySiteId: 'supply-1', shelterId: 4002,
+    }) })
+    const s = await svc.simulateFlood('fire')
+    expect(s.planSource).toBe('ai')
+    expect(s.aiReasoning).toContain('火势')
+    expect(s.pendingPlan!.survey.map((x) => x.droneId).sort()).toEqual([...firstTwo].sort())
+  })
+
+  it('大模型 down（抛错）：回退算法选案 + planSource=algorithm', async () => {
+    const { svc } = makeService()
+    svc.llmClient = async () => { throw new Error('ECONNREFUSED') }
+    const s = await svc.simulateFlood('flood')
+    expect(s.planSource).toBe('algorithm')
+    expect(s.aiReasoning).toBeNull()
+    expect(s.pendingPlan).not.toBeNull()
+    expect(s.pendingPlan!.survey.length).toBeGreaterThan(0)
+  })
+
+  it('大模型输出非法（引用不存在的机）：同样回退算法', async () => {
+    const { svc } = makeService()
+    svc.llmClient = async () => ({ content: '{"reasoning":"r","surveyDroneIds":["ghost"],"supplySiteId":"x","shelterId":1}' })
+    const s = await svc.simulateFlood('flood')
+    expect(s.planSource).toBe('algorithm')
+  })
+
   it('确认后增援评估链路不受影响（execute → reinforce 可用）', async () => {
     const { svc } = makeService()
     await svc.simulateFlood('fire')
