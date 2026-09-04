@@ -189,6 +189,32 @@ export class DisasterService implements OnModuleInit {
     return this.getState()
   }
 
+  /** 结束演练：灾情档案标记 resolvedAt，清空在演状态，按钮恢复可用 */
+  async resolveDisaster(): Promise<DisasterSnapshot> {
+    if (!this.flood) return this.getState()
+    if (this.disasterId != null) {
+      await this.prisma.disasterEvent.update({
+        where: { id: this.disasterId },
+        data: { resolvedAt: new Date() },
+      }).catch(() => undefined)
+    }
+    const delivered = this.situation?.deliveredPacks ?? 0
+    this.flood = null
+    this.plan = null
+    this.situation = null
+    this.summary = null
+    this.evalResult = null
+    this.reinforced = false
+    this.disasterId = null
+    this.prevLegs = new Map()
+    this.recordedDrops.clear()
+    this.surveyArrivedAnnounced = false
+    this.log.pushFeed('disaster', '洪灾演练结束，灾情解除（累计投送 ' + delivered + ' 件物资）')
+    this.log.pushNode('演练结束', '灾情解除 · 累计投送 ' + delivered + ' 件')
+    this.broadcastIfChanged()
+    return this.getState()
+  }
+
   private refreshEval(fleet: FleetState): void {
     if (!this.situation) return
     const surveyCount = fleet.drones.filter((d) => d.mission === 'survey' && d.status !== 'docked').length

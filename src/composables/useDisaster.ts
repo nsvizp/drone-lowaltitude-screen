@@ -70,6 +70,11 @@ export function useDisaster() {
     void fetch('/api/disaster/reinforce', { method: 'POST' }).catch(() => undefined)
   }
 
+  /** 结束演练（灾情解除，恢复初始态） */
+  const resolveDisaster = () => {
+    void fetch('/api/disaster/resolve', { method: 'POST' }).catch(() => undefined)
+  }
+
   const openVideo = (droneId: string) => { videoDroneId.value = droneId }
   const closeVideo = () => { videoDroneId.value = null }
 
@@ -80,6 +85,6 @@ export function useDisaster() {
 
   return {
     flood, plan, situation, summary: summaryRef, evalResult, reinforced, active, videoDroneId,
-    simulateFlood, executeReinforcement, openVideo, closeVideo,
+    simulateFlood, executeReinforcement, resolveDisaster, openVideo, closeVideo,
   }
 }

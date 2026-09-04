@@ -444,6 +444,13 @@ onBeforeUnmount(() => {
       >
         {{ disaster.active.value ? '🔴 抢险进行中…' : '⚠ 模拟洪灾' }}
       </button>
+      <button
+        v-if="disaster.active.value"
+        class="center-map__disaster center-map__disaster--resolve"
+        @click="disaster.resolveDisaster"
+      >
+        ✅ 结束演练
+      </button>
     </div>
 
     <DispatchCard />
@@ -596,6 +603,14 @@ onBeforeUnmount(() => {
 
     &:hover:not(:disabled) { background: rgba(255, 59, 59, 0.3); }
     &:disabled { opacity: 0.7; cursor: default; }
+
+    &--resolve {
+      color: #9be89b;
+      background: rgba(46, 204, 113, 0.15);
+      border-color: rgba(46, 204, 113, 0.5);
+
+      &:hover { background: rgba(46, 204, 113, 0.3); }
+    }
   }
 
   &__themes {

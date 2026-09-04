@@ -21,6 +21,12 @@ export class SimHostController {
     return this.disaster.executeReinforcement()
   }
 
+  /** 结束演练（清空在演灾情） */
+  @Post('disaster/resolve')
+  resolve() {
+    return this.disaster.resolveDisaster()
+  }
+
   /** 当前灾情状态快照（兜底拉取） */
   @Get('disaster/state')
   state() {
