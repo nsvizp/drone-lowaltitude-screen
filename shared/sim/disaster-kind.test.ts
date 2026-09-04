@@ -21,10 +21,15 @@ describe('灾种扩展（洪灾/泥石流）', () => {
     expect(f2.id).toContain('flood')
   })
 
-  it('DISASTER_NAME 覆盖两种灾种', () => {
-    const names: DisasterKind[] = ['flood', 'debris']
+  it('DISASTER_NAME 覆盖三种灾种', () => {
+    const names: DisasterKind[] = ['flood', 'debris', 'fire']
     for (const k of names) expect(DISASTER_NAME[k]).toBeTruthy()
-    expect(DISASTER_NAME.flood).toBe('洪灾')
-    expect(DISASTER_NAME.debris).toBe('泥石流')
+    expect(DISASTER_NAME.fire).toBe('火灾')
+  })
+
+  it('createDisasterEvent 支持火灾', () => {
+    const e = createDisasterEvent(mulberry32(11), area, 0, 'fire')
+    expect(e.kind).toBe('fire')
+    expect(e.id).toContain('fire')
   })
 })

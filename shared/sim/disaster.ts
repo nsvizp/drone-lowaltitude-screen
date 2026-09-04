@@ -2,18 +2,20 @@ import { distanceMeters, EMERGENCY_SPEED, type DroneState, type FleetState, type
 import type { EmergencyPoint } from './emergency-data'
 import type { BBox } from './emergency-data'
 
-/** 灾种：洪灾 / 泥石流 */
-export type DisasterKind = 'flood' | 'debris'
+/** 灾种：洪灾 / 泥石流 / 火灾 */
+export type DisasterKind = 'flood' | 'debris' | 'fire'
 
 export const DISASTER_NAME: Record<DisasterKind, string> = {
   flood: '洪灾',
   debris: '泥石流',
+  fire: '火灾',
 }
 
 /** 灾种匹配的物资关键词 */
 export const DISASTER_SUPPLY_KEYWORDS: Record<DisasterKind, string[]> = {
   flood: ['饮用水', '食品', '救生', '冲锋舟', '帐篷', '被褥'],
   debris: ['破拆', '绳索', '担架', '急救', '钢', '防护'],
+  fire: ['破拆', '急救', '防护', '照明', '中和剂', '氧气'],
 }
 
 export interface FloodEvent {

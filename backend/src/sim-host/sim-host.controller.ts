@@ -11,8 +11,8 @@ export class SimHostController {
 
   /** 触发灾情模拟（前端「模拟洪灾/泥石流」按钮；body.type = flood | debris） */
   @Post('disaster/simulate')
-  simulate(@Body('type') type?: 'flood' | 'debris') {
-    return this.disaster.simulateFlood(type === 'debris' ? 'debris' : 'flood')
+  simulate(@Body('type') type?: 'flood' | 'debris' | 'fire') {
+    return this.disaster.simulateFlood(type === 'debris' ? 'debris' : type === 'fire' ? 'fire' : 'flood')
   }
 
   /** 执行二次增援（前端「执行增援」按钮） */

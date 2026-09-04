@@ -4,6 +4,7 @@ import { useDrones } from '@/composables/useDrones'
 import { useDisaster } from '@/composables/useDisaster'
 import { useDraggable, useResizable } from '@/composables/useDraggable'
 import { formatHudTelemetry, getVideoSource, signalBars } from '@/sim/video'
+import { pickSurveyVideo } from '@/sim/video-packs'
 
 const { drones } = useDrones()
 const disaster = useDisaster()
@@ -41,14 +42,20 @@ const scene = computed(() => {
   return src.type === 'simulated' ? src.scene : ('city' as const)
 })
 
-/** 灾情勘测实况：勘测机在场（灾情激活且该机为勘测任务）时切换到真实航拍视频 */
+/**
+ * 灾情勘测实况：勘测机在场时切换真实航拍视频。
+ * 多架勘测机各看不同机位（按 droneId 散列选片）；执行增援后切换到包内下一片。
+ */
 const liveSrc = computed(() => {
   const d = drone.value
   const f = disaster.flood.value
   if (!d || !f || d.mission !== 'survey') return null
-  return '/videos/' + (f.kind === 'debris' ? 'debris' : 'flood') + '.mp4'
+  return pickSurveyVideo(f.kind ?? 'flood', d.id, disaster.reinforced.value)
 })
-const disasterLabel = computed(() => (disaster.flood.value?.kind === 'debris' ? '⛰ 泥石流' : '🌊 洪灾'))
+const disasterLabel = computed(() => {
+  const k = disaster.flood.value?.kind
+  return k === 'debris' ? '⛰ 泥石流' : k === 'fire' ? '🔥 火灾' : '🌊 洪灾'
+})
 /** HUD 遥测行（真实视频模式下以 DOM 覆盖层呈现，与画布模式一致） */
 const hudLines = computed(() => (drone.value ? formatHudTelemetry(drone.value) : []))
 
