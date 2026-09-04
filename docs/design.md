@@ -160,7 +160,7 @@ advanceFleet(state, routes, dtMs) → 新状态（纯函数，不改入参）
 
 ### 4.6 登录与路由
 
-- mock 账号 `admin / admin123»（`stores/auth.ts»），token 存 localStorage
+- mock 账号 `admin / Admin@2026»（`stores/auth.ts»），token 存 localStorage
 - 验证码：canvas 4 字符 + 干扰线，本地校验，点击刷新
 - hash 路由守卫：未登录 → `/login»；已登录访问 `/login» → 大屏
 - 安全说明：验证码与密码校验均为前端 mock，仅用于演示流程；真实场景必须由后端校验

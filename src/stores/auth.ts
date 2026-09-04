@@ -7,8 +7,8 @@ interface LoginParams {
   password: string
 }
 
-/** Mock 登录：账号 admin / 密码 admin123（真实后端接入后替换为接口调用） */
-const MOCK_USER = { username: 'admin', password: 'admin123', displayName: 'Admin' }
+/** Mock 登录：账号 admin / 密码 Admin@2026（强密码；真实后端接入后替换为接口调用） */
+const MOCK_USER = { username: 'admin', password: 'Admin@2026', displayName: 'Admin' }
 
 export const useAuthStore = defineStore('auth', {
   state: () => ({

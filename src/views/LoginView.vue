@@ -1,7 +1,16 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import {
+  checkPasswordStrength,
+  loadGuard,
+  lockRemainSec,
+  recordFailure,
+  recordSuccess,
+  saveGuard,
+  LOCK_THRESHOLD,
+} from '@/stores/login-guard'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -13,6 +22,19 @@ const captchaCode = ref('')
 const errorMsg = ref('')
 const loading = ref(false)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
+
+// ---------- 错误锁定（localStorage 持久化，刷新不丢） ----------
+let guard = loadGuard()
+const nowTick = ref(Date.now())
+let clockTimer: ReturnType<typeof setInterval> | undefined
+const lockRemain = computed(() => lockRemainSec(guard, nowTick.value))
+const failRemain = ref(LOCK_THRESHOLD - guard.failCount)
+
+function applyGuard(next: typeof guard) {
+  guard = next
+  saveGuard(guard)
+  failRemain.value = LOCK_THRESHOLD - guard.failCount
+}
 
 const CAPTCHA_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 
@@ -50,8 +72,19 @@ function drawCaptcha() {
 
 async function onSubmit() {
   errorMsg.value = ''
+  // 锁定中直接拒绝
+  if (lockRemain.value > 0) {
+    errorMsg.value = '账号已锁定，请 ' + Math.ceil(lockRemain.value / 60) + ' 分钟后重试'
+    return
+  }
   if (!username.value || !password.value) {
     errorMsg.value = '请输入用户名和密码'
+    return
+  }
+  // 强密码强制校验（不计入失败次数）
+  const strength = checkPasswordStrength(password.value)
+  if (!strength.ok) {
+    errorMsg.value = '密码强度不足：' + strength.problems.join('、')
     return
   }
   if (captchaInput.value.toUpperCase() !== captchaCode.value) {
@@ -63,9 +96,15 @@ async function onSubmit() {
   loading.value = true
   try {
     await auth.login({ username: username.value, password: password.value })
+    applyGuard(recordSuccess(guard))
     router.push({ name: 'screen' })
   } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : '登录失败'
+    applyGuard(recordFailure(guard, Date.now()))
+    if (lockRemainSec(guard, Date.now()) > 0) {
+      errorMsg.value = '连续失败 ' + LOCK_THRESHOLD + ' 次，账号已锁定 5 分钟'
+    } else {
+      errorMsg.value = (e instanceof Error ? e.message : '登录失败') + '（还可尝试 ' + failRemain.value + ' 次）'
+    }
     drawCaptcha()
     captchaInput.value = ''
   } finally {
@@ -73,14 +112,18 @@ async function onSubmit() {
   }
 }
 
-onMounted(drawCaptcha)
+onMounted(() => {
+  drawCaptcha()
+  clockTimer = setInterval(() => { nowTick.value = Date.now() }, 1000)
+})
+onBeforeUnmount(() => clearInterval(clockTimer))
 </script>
 
 <template>
   <div class="login">
     <div class="login__card">
       <h1 class="login__title">应急指挥调度平台</h1>
-      <p class="login__subtitle">Low-Altitude UAV Command &amp; Dispatch Platform</p>
+      <p class="login__subtitle">Emergency Command &amp; Dispatch Platform</p>
       <form class="login__form" @submit.prevent="onSubmit">
         <label class="login__field">
           <span>用户名</span>
@@ -104,10 +147,14 @@ onMounted(drawCaptcha)
             />
           </div>
         </label>
-        <p v-if="errorMsg" class="login__error">{{ errorMsg }}</p>
-        <button class="login__submit" type="submit" :disabled="loading">
-          {{ loading ? '登录中…' : '登 录' }}
+        <p v-if="lockRemain > 0" class="login__locked">
+          🔒 账号已锁定，剩余 {{ Math.floor(lockRemain / 60) }} 分 {{ lockRemain % 60 }} 秒
+        </p>
+        <p v-else-if="errorMsg" class="login__error">{{ errorMsg }}</p>
+        <button class="login__submit" type="submit" :disabled="loading || lockRemain > 0">
+          {{ lockRemain > 0 ? '已锁定' : loading ? '登录中…' : '登 录' }}
         </button>
+        <p class="login__hint">演示账号：admin / Admin@2026（需 8 位以上含大小写、数字、符号）</p>
       </form>
     </div>
   </div>
@@ -197,6 +244,24 @@ onMounted(drawCaptcha)
   &__error {
     color: var(--warn);
     font-size: 12px;
+    text-align: center;
+  }
+
+  &__locked {
+    color: #ffd666;
+    font-size: 13px;
+    text-align: center;
+    padding: 8px;
+    margin-bottom: 10px;
+    background: rgba(255, 214, 102, 0.08);
+    border: 1px solid rgba(255, 214, 102, 0.3);
+    border-radius: 4px;
+  }
+
+  &__hint {
+    margin-top: 12px;
+    font-size: 11px;
+    color: var(--text-dim);
     text-align: center;
   }
 

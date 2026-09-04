@@ -1,44 +1,20 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
 import PanelCard from '@/components/PanelCard.vue'
-import { openTaskOverview } from '@/api'
-import { PERIOD_LABELS } from '@/api/period'
-import type { Period, TaskOverview, TaskStatus } from '@/api/types'
 import { useEventLog, type FeedKind } from '@/composables/event-log'
+import { useDrones } from '@/composables/useDrones'
+import { useDisaster } from '@/composables/useDisaster'
+import { buildDispatchRows, buildWarehouseRows } from '@/sim/dispatch-board'
+import { computed } from 'vue'
 
-// ---------- 飞行任务排行榜 ----------
-const periods: Period[] = ['today', 'week', 'month', 'year', 'total']
-const period = ref<Period>('total')
-const task = ref<TaskOverview | null>(null)
-const activeStatus = ref<TaskStatus>('dispatched')
+// ---------- 物资仓储（静态台账） + 物资调度（实时机队） ----------
+const { drones } = useDrones()
+const { situation } = useDisaster()
 
-const STATUS_META: { key: TaskStatus; label: string; numKey: keyof TaskOverview; pctKey: keyof TaskOverview; color: string }[] = [
-  { key: 'dispatched', label: '待派发', numKey: 'dispatchedNum', pctKey: 'dispatchedPercent', color: '#ff6b6b' },
-  { key: 'dispatching', label: '派发中', numKey: 'dispatchingNum', pctKey: 'dispatchingPercent', color: '#2f80ed' },
-  { key: 'received', label: '已接单', numKey: 'receivedNum', pctKey: 'receivedPercent', color: '#52d273' },
-  { key: 'completed', label: '已结单', numKey: 'completedNum', pctKey: 'completedPercent', color: '#a66bff' },
-]
+const warehouses = buildWarehouseRows()
 
-// 请求序号——快速切换周期时只采纳最后一次响应，防止旧数据覆盖
-let taskReqSeq = 0
-async function loadTask() {
-  const seq = ++taskReqSeq
-  const res = await openTaskOverview(period.value)
-  if (seq === taskReqSeq) task.value = res.data
-}
-watch(period, loadTask)
-
-const orgBars = computed(() => {
-  const list = task.value?.taskOverviewRespVoList ?? []
-  const meta = STATUS_META.find((m) => m.key === activeStatus.value)!
-  return list.map((org) => ({
-    name: org.deptName,
-    value: org[meta.numKey] as number,
-    percent: org[meta.pctKey] as number,
-  }))
-})
-
-const activeMeta = computed(() => STATUS_META.find((m) => m.key === activeStatus.value)!)
+const dispatch = computed(() =>
+  buildDispatchRows({ drones: drones.value, tickCount: 0 }, situation.value),
+)
 
 // ---------- 事件实时动态 + 节点记录 ----------
 const { feedEvents, nodeRecords } = useEventLog()
@@ -50,52 +26,53 @@ const KIND_ICON: Record<FeedKind, string> = {
   supply: '📦',
   field: '📡',
 }
-
-onMounted(loadTask)
 </script>
 
 <template>
   <aside class="right-panel">
-    <PanelCard title="飞行任务排行榜" class="right-panel__task">
-      <div class="task__periods">
-        <button
-          v-for="p in periods"
-          :key="p"
-          class="task__period"
-          :class="{ 'task__period--active': period === p }"
-          @click="period = p"
-        >
-          {{ PERIOD_LABELS[p] }}
-        </button>
-      </div>
-
-      <div v-if="task" class="task__statuses">
-        <button
-          v-for="m in STATUS_META"
-          :key="m.key"
-          class="task__status"
-          :class="{ 'task__status--active': activeStatus === m.key }"
-          :style="{ '--status-color': m.color }"
-          @click="activeStatus = m.key"
-        >
-          <span class="task__status-num">{{ task[m.numKey] }}</span>
-          <span class="task__status-label">{{ m.label }}</span>
-        </button>
-      </div>
-
-      <ul class="task__orgs">
-        <li v-for="org in orgBars" :key="org.name" class="task__org">
-          <span class="task__org-name">{{ org.name }}</span>
-          <div class="task__org-track">
-            <div
-              class="task__org-bar"
-              :style="{ width: Math.max(org.percent, 2) + '%', background: activeMeta.color }"
-            />
+    <PanelCard title="物资调度情况" class="right-panel__material">
+      <div class="mat">
+        <div class="mat__dispatch">
+          <div class="mat__stats">
+            <div class="mat__stat">
+              <span class="mat__stat-num mat__stat-num--blue">{{ dispatch.inflight }}</span>
+              <span class="mat__stat-label">在途架次</span>
+            </div>
+            <div class="mat__stat">
+              <span class="mat__stat-num mat__stat-num--cyan">{{ dispatch.deliveredPacks }}</span>
+              <span class="mat__stat-label">已投送（件）</span>
+            </div>
           </div>
-          <span class="task__org-value">{{ org.value }}</span>
-          <span class="task__org-pct">{{ org.percent }}%</span>
-        </li>
-      </ul>
+          <ul class="mat__rows">
+            <li v-for="(r, i) in dispatch.rows" :key="r.drone + i" class="mat__row">
+              <span class="mat__row-drone">{{ r.drone }}</span>
+              <span class="mat__row-task" :title="r.task">{{ r.task }}</span>
+              <span class="mat__row-status">{{ r.statusText }}</span>
+            </li>
+            <li v-if="dispatch.rows.length === 0" class="mat__empty">当前无物资调度任务</li>
+          </ul>
+        </div>
+
+        <div class="mat__warehouse">
+          <div class="mat__section-title">物资仓储情况</div>
+          <ul class="mat__warehouses">
+            <li v-for="w in warehouses" :key="w.name" class="mat__wh">
+              <div class="mat__wh-head">
+                <span class="mat__wh-name">{{ w.name }}</span>
+                <span class="mat__wh-num">{{ w.stock }}/{{ w.capacity }}</span>
+              </div>
+              <div class="mat__wh-track">
+                <div
+                  class="mat__wh-bar"
+                  :class="{ 'mat__wh-bar--low': w.percent < 40 }"
+                  :style="{ width: w.percent + '%' }"
+                />
+              </div>
+              <div class="mat__wh-items">{{ w.items }}</div>
+            </li>
+          </ul>
+        </div>
+      </div>
     </PanelCard>
 
     <PanelCard title="事件实时动态" class="right-panel__feed">
@@ -133,107 +110,8 @@ onMounted(loadTask)
   flex-direction: column;
   gap: 16px;
 
-  &__task { flex: 1.2; min-height: 0; }
+  &__material { flex: 1.2; min-height: 0; }
   &__feed { flex: 1; min-height: 0; }
-}
-
-.task {
-  &__periods {
-    display: flex;
-    gap: 8px;
-  }
-
-  &__period {
-    flex: 1;
-    padding: 6px 0;
-    font-size: 13px;
-    color: var(--text-main);
-    background: rgba(6, 24, 48, 0.7);
-    border: 1px solid rgba(47, 128, 237, 0.3);
-    border-radius: 4px;
-    cursor: pointer;
-
-    &--active {
-      background: linear-gradient(90deg, var(--primary), var(--primary-light));
-      color: #fff;
-      border-color: transparent;
-    }
-  }
-
-  &__statuses {
-    margin-top: 12px;
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 8px;
-  }
-
-  &__status {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 8px 0;
-    background: rgba(6, 24, 48, 0.7);
-    border: 1px solid rgba(47, 128, 237, 0.25);
-    border-radius: 4px;
-    cursor: pointer;
-
-    &--active {
-      border-color: var(--status-color);
-      box-shadow: inset 0 0 12px rgba(0, 229, 255, 0.08);
-    }
-
-    &-num {
-      font-family: var(--font-num);
-      font-size: 24px;
-      font-weight: 700;
-      color: var(--status-color);
-    }
-
-    &-label { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
-  }
-
-  &__orgs {
-    margin-top: 12px;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  &__org {
-    display: grid;
-    grid-template-columns: 56px 1fr 30px 40px;
-    align-items: center;
-    gap: 8px;
-    font-size: 12px;
-
-    &-name { color: var(--text-main); }
-
-    &-track {
-      height: 10px;
-      background: rgba(6, 24, 48, 0.8);
-      border-radius: 5px;
-      overflow: hidden;
-    }
-
-    &-bar {
-      height: 100%;
-      border-radius: 5px;
-      transition: width 0.4s ease;
-    }
-
-    &-value {
-      font-family: var(--font-num);
-      color: #8ab8ff;
-      text-align: right;
-    }
-
-    &-pct {
-      font-family: var(--font-num);
-      color: var(--accent);
-      text-align: right;
-    }
-  }
 }
 
 .feed {
@@ -324,6 +202,130 @@ onMounted(loadTask)
     font-size: 11px;
     color: var(--text-dim);
     line-height: 1.5;
+  }
+}
+
+.mat {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  gap: 10px;
+
+  &__section-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #ffd666;
+    margin-bottom: 6px;
+  }
+
+  &__dispatch { flex: 0 0 auto; }
+
+  &__stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  &__stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 6px 0;
+    background: rgba(6, 24, 48, 0.7);
+    border: 1px solid rgba(47, 128, 237, 0.25);
+    border-radius: 4px;
+
+    &-num {
+      font-family: var(--font-num);
+      font-size: 20px;
+      font-weight: 700;
+
+      &--blue { color: #8ab8ff; }
+      &--cyan { color: var(--accent); }
+    }
+
+    &-label { font-size: 11px; color: var(--text-dim); }
+  }
+
+  &__rows {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 88px;
+    overflow-y: auto;
+  }
+
+  &__row {
+    display: grid;
+    grid-template-columns: 96px 1fr 48px;
+    gap: 6px;
+    font-size: 12px;
+    align-items: center;
+
+    &-drone { color: var(--accent); font-family: var(--font-num); font-size: 11px; }
+
+    &-task {
+      color: var(--text-main);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    &-status { color: #52d273; text-align: right; }
+  }
+
+  &__empty { color: var(--text-dim); font-size: 12px; padding: 4px 0; }
+
+  &__warehouse {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border-top: 1px dashed rgba(47, 128, 237, 0.3);
+    padding-top: 8px;
+  }
+
+  &__warehouses {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  &__wh {
+    &-head {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+    }
+
+    &-name { color: var(--text-main); }
+
+    &-num { font-family: var(--font-num); color: #8ab8ff; font-size: 11px; }
+
+    &-track {
+      height: 6px;
+      margin-top: 3px;
+      background: rgba(6, 24, 48, 0.8);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    &-bar {
+      height: 100%;
+      border-radius: 3px;
+      background: linear-gradient(90deg, var(--primary), var(--primary-light));
+
+      &--low { background: linear-gradient(90deg, #ff6b6b, #ffd666); }
+    }
+
+    &-items { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
   }
 }
 </style>
