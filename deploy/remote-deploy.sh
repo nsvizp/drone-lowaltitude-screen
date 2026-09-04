@@ -29,6 +29,13 @@ server {
     gzip on;
     gzip_types text/css application/javascript application/json image/svg+xml;
 
+    # 安全响应头：防点击劫持 / MIME 嗅探 / Referrer 泄露 / 收敛资源加载域
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    # CSP：高德地图 JS API/瓦片 + socket.io(ws) + 内联样式（AMap 注入）放行
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' https://webapi.amap.com https://restapi.amap.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.amap.com https://*.autonavi.com; connect-src 'self' ws: wss: https://restapi.amap.com https://*.amap.com; font-src 'self' data:; media-src 'self'; frame-ancestors 'self'" always;
+
     location / {
         try_files \$uri \$uri/ /index.html;
     }

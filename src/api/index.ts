@@ -9,6 +9,7 @@ import type {
   WorkOrderOverview,
 } from './types'
 import { paginateLocal, scaleTask, PERIOD_FACTOR } from './mock-scale'
+import { authFetch } from './http'
 import type { WarehouseRow } from '@/sim/dispatch-board'
 
 /** VITE_USE_MOCK=1 时强制走本地 mock（离线演示）；默认真接口、失败自动回退 mock */
@@ -22,7 +23,7 @@ function ok<T>(data: T): ApiResponse<T> {
 async function req<T>(path: string, fallback: () => Promise<T> | T): Promise<T> {
   if (USE_MOCK) return fallback()
   try {
-    const res = await fetch(path)
+    const res = await authFetch(path)
     if (!res.ok) throw new Error('HTTP ' + res.status)
     return (await res.json()) as T
   } catch (e) {
