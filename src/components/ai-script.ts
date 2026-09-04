@@ -1,4 +1,5 @@
 import type { DisasterKind, DispatchPlan, FloodEvent } from '@/sim/disaster'
+import { formatPlace } from '@/sim/place-name'
 
 export interface AiParagraph { tag: string; text: string }
 
@@ -94,6 +95,8 @@ export interface AiScriptInput {
   /** 待确认调配草稿（优先于 plan 展示——推演发生在确认前） */
   pendingPlan: DispatchPlan | null
   deliveredPacks: number
+  /** 灾点地名（逆地理/行政区回退），有值时替代裸坐标 */
+  placeName?: string | null
 }
 
 /** 推演稿生成：与抢险调配单同源（pendingPlan/plan 直出），无草稿时回退通用稿 */
@@ -113,12 +116,12 @@ export function buildAiScript(input: AiScriptInput): { think: string[]; paras: A
 
   const paras: AiParagraph[] = []
   const sev = flood ? 'ⅠⅡⅢ'[flood.severity - 1] : 'Ⅱ'
-  const pos = flood ? flood.position[0].toFixed(3) + ', ' + flood.position[1].toFixed(3) : '121.4203, 31.1623'
+  const pos = flood ? formatPlace(input.placeName, flood.position) : '121.4203, 31.1623'
 
   paras.push({
     tag: scene.icon + ' 灾情研判',
     text:
-      '检测到' + scene.name + sev + '级灾害，灾点位于（' + pos + '）。' +
+      '检测到' + scene.name + sev + '级灾害，灾点位于' + pos + '。' +
       scene.narrative +
       (deliveredPacks > 0 ? '；已累计投送应急物资 ' + deliveredPacks + ' 件' : '') + '。',
   })

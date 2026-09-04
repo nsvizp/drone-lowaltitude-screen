@@ -28,6 +28,7 @@ function buildScript(): { think: string[]; paras: AiParagraph[] } {
     plan: disaster.plan.value,
     pendingPlan: disaster.pendingPlan.value,
     deliveredPacks: disaster.summary.value?.deliveredPacks ?? 0,
+    placeName: disaster.floodPlace.value,
   })
   const reasoning = disaster.aiReasoning?.value
   if (reasoning) paras.unshift({ tag: '🧠 大模型研判', text: reasoning })

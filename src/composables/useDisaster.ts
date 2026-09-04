@@ -1,6 +1,7 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { authFetch } from '@/api/http'
 import { getSocket } from '@/api/socket'
+import { nearestDistrict } from '@/sim/place-name'
 import type { DispatchPlan, FloodEvent } from '@/sim/disaster'
 import type { ReinforcementEval, SituationState, SituationSummary } from '@/sim/situation'
 
@@ -40,6 +41,32 @@ const evalResult = ref<ReinforcementEval | null>(null)
 const reinforced = ref(false)
 const planSource = ref<'ai' | 'algorithm' | null>(null)
 const aiReasoning = ref<string | null>(null)
+/** 灾点地名（高德逆地理；失败回退最近行政区） */
+export const floodPlace = ref<string | null>(null)
+
+/** 逆地理编码：用公开高德 key 调 REST regeo；任何失败静默回退 */
+async function reverseGeocode(lng: number, lat: number): Promise<void> {
+  floodPlace.value = nearestDistrict([lng, lat]) // 先给行政区兜底
+  try {
+    const cfg = (await (await authFetch('/api/config/public')).json()) as { 'amap.key'?: string }
+    const key = cfg['amap.key']
+    if (!key) return
+    const res = await fetch('https://restapi.amap.com/v3/geocode/regeo?location=' + lng + ',' + lat + '&key=' + key + '&extensions=base')
+    const data = (await res.json()) as { status: string; regeocode?: { addressComponent?: { township?: string; district?: string; streetNumber?: { street?: string } } } }
+    if (data.status !== '1' || !data.regeocode) return
+    const ac = data.regeocode.addressComponent
+    const street = ac?.streetNumber?.street && typeof ac.streetNumber.street === 'string' ? ac.streetNumber.street : ''
+    const township = ac?.township && typeof ac.township === 'string' ? ac.township : ''
+    const district = ac?.district ?? ''
+    floodPlace.value = district + (street || township) || district || floodPlace.value
+  } catch { /* 回退行政区 */ }
+}
+
+// 灾点落地即解析地名
+watch(flood, (f) => {
+  if (f) void reverseGeocode(f.position[0], f.position[1])
+  else floodPlace.value = null
+})
 const videoDroneId = ref<string | null>(null)
 
 let connected = false
@@ -99,12 +126,12 @@ export function useDisaster() {
   const closeVideo = () => { videoDroneId.value = null }
 
   // 调试/验收钩子（Playwright 探针）
-  ;(window as unknown as Record<string, unknown>).__DISASTER = { flood, plan, pendingPlan, situation, summaryRef, evalResult, planSource, aiReasoning, openVideo, closeVideo }
+  ;(window as unknown as Record<string, unknown>).__DISASTER = { flood, plan, pendingPlan, situation, summaryRef, evalResult, planSource, aiReasoning, floodPlace, openVideo, closeVideo }
 
   const active = computed(() => flood.value !== null)
 
   return {
-    flood, plan, pendingPlan, situation, summary: summaryRef, evalResult, reinforced, active, videoDroneId, planSource, aiReasoning,
+    flood, plan, pendingPlan, situation, summary: summaryRef, evalResult, reinforced, active, videoDroneId, planSource, aiReasoning, floodPlace,
     simulateFlood, executeDispatch, executeReinforcement, resolveDisaster, openVideo, closeVideo,
   }
 }

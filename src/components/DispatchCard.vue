@@ -5,9 +5,13 @@ import { useDrones } from '@/composables/useDrones'
 import { liveEta, liveSurveyRows } from '@/sim/live-dispatch'
 import { aiReasoningPhase } from './ai-stage'
 import { draftConfirmState } from './ai-script'
+import { formatPlace } from '@/sim/place-name'
 
-const { flood, plan, pendingPlan, planSource, evalResult, reinforced, executeDispatch, executeReinforcement } = useDisaster()
+const { flood, plan, pendingPlan, planSource, evalResult, reinforced, floodPlace, executeDispatch, executeReinforcement } = useDisaster()
 const { drones } = useDrones()
+
+/** 灾点展示：具体地名附近（坐标） */
+const floodPlaceText = computed(() => (flood.value ? formatPlace(floodPlace.value, flood.value.position) : ''))
 
 /** 草稿确认入口：大模型选案→只在 AI 卡确认；算法兜底→推演完成后才可下达 */
 const confirmState = computed(() => draftConfirmState(planSource.value, aiReasoningPhase.value))
@@ -44,7 +48,7 @@ function etaText(sec: number, arrived?: boolean): string {
       <span class="dispatch-card__severity" :data-sev="flood.severity">{{ 'ⅠⅡⅢ'[flood.severity - 1] }} 级{{ KIND_NAME[flood.kind ?? 'flood'] }}</span>
     </div>
     <div class="dispatch-card__coord">
-      灾点 {{ flood.position[0].toFixed(4) }}, {{ flood.position[1].toFixed(4) }}
+      灾点 {{ floodPlaceText }}
     </div>
     <div class="dispatch-card__group">
       <div class="dispatch-card__group-title">勘测组（拟改派 {{ pendingPlan.survey.length }} 架）</div>
@@ -75,7 +79,7 @@ function etaText(sec: number, arrived?: boolean): string {
       <span class="dispatch-card__severity" :data-sev="flood.severity">{{ 'ⅠⅡⅢ'[flood.severity - 1] }} 级{{ KIND_NAME[flood.kind ?? 'flood'] }}</span>
     </div>
     <div class="dispatch-card__coord">
-      灾点 {{ flood.position[0].toFixed(4) }}, {{ flood.position[1].toFixed(4) }}
+      灾点 {{ floodPlaceText }}
     </div>
 
     <div class="dispatch-card__group">

@@ -24,6 +24,7 @@ import {
 } from '../../../shared/sim/situation'
 import { distanceMeters, mulberry32, recallMissionDrones, type FleetState } from '../../../shared/sim/drone-sim'
 import { analyzeWithLlm, makeOpenAiClient, type LlmContext, type LlmClient } from './llm'
+import { latchReinforceEval } from '../../../shared/sim/eval-latch'
 import { createEmergencyData } from '../../../shared/sim/emergency-data'
 import { PrismaService } from '../prisma.service'
 import { EventBus } from './event-bus'
@@ -296,7 +297,7 @@ export class DisasterService implements OnModuleInit {
     const surveyCount = fleet.drones.filter((d) => d.mission === 'survey' && d.status !== 'docked').length
     const nextSummary = summarizeSituation(this.situation, Math.max(surveyCount, 1))
     if (JSON.stringify(nextSummary) !== JSON.stringify(this.summary)) this.summary = nextSummary
-    const nextEval = evaluateReinforcement(nextSummary, fleet)
+    const nextEval = latchReinforceEval(this.evalResult, evaluateReinforcement(nextSummary, fleet))
     if (JSON.stringify(nextEval) !== JSON.stringify(this.evalResult)) this.evalResult = nextEval
   }
 
