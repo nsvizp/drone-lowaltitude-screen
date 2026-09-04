@@ -67,6 +67,8 @@ model Warehouse {
   items    String
   stock    Int
   capacity Int
+  lng      Float  @default(0)
+  lat      Float  @default(0)
 
   @@map("warehouses")
 }

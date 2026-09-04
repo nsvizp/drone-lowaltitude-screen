@@ -29,6 +29,7 @@ export class EventsGateway implements OnModuleInit {
     this.bus.on('feed', (e) => this.server.emit('feed', e))
     this.bus.on('node', (n) => this.server.emit('node', n))
     this.bus.on('disaster', (d) => this.server.emit('disaster', d))
+    this.bus.on('warehouses', (w) => this.server.emit('warehouses', w))
 
     // 新客户端连入：补发当前状态与历史
     this.server.on('connection', (socket) => {

@@ -108,7 +108,19 @@ export class DisasterService implements OnModuleInit {
     if (currentDrones.length === 0) return this.getState()
     const rng = mulberry32(Date.now() % 100000)
     const floodEvent = createFloodEvent(rng, FLOOD_AREA, 0)
-    const supplies = createEmergencyData(mulberry32(20260903)).supplies
+    // 物资点 = 仓储台账（真实坐标 + 实时库存）；为空时回退模拟数据
+    const warehouses = await this.prisma.warehouse.findMany({ orderBy: { id: 'asc' } })
+    const supplies = warehouses.length > 0
+      ? warehouses.map((w) => ({
+          id: 'supply-' + w.id,
+          category: 'supplies' as const,
+          name: w.name,
+          position: [w.lng, w.lat] as [number, number],
+          detail: w.items + ' · 库存 ' + w.stock + ' 件',
+          status: '可用',
+          org: w.org,
+        }))
+      : createEmergencyData(mulberry32(20260903)).supplies
     const fleetSnapshot: FleetState = { drones: currentDrones, tickCount: 0 }
     const dispatchPlan = planFloodDispatch(fleetSnapshot, SHELTERS, FLYERS, supplies, floodEvent)
 
@@ -172,6 +184,7 @@ export class DisasterService implements OnModuleInit {
       })
     }
     this.reinforced = true
+    const reinforceText = '指挥部：二次调配增援已执行，增援勘测机与投送架次已起飞'
     if (this.situation) {
       this.situation = {
         ...this.situation,
@@ -179,11 +192,11 @@ export class DisasterService implements OnModuleInit {
           seq: this.situation.events.length + 1,
           tick: this.situation.events.length,
           kind: 'supply' as const,
-          text: '指挥部：二次调配增援已执行，增援勘测机与投送架次已起飞',
+          text: reinforceText,
         }].slice(-30),
       }
     }
-    this.log.pushFeed('disaster', '二次调配增援已执行，增援机已起飞')
+    this.log.pushFeed('disaster', reinforceText)
     this.log.pushNode('二次增援执行', shelter.name + ' 起飞增援勘测/投送', this.disasterId ?? undefined)
     this.broadcastIfChanged()
     return this.getState()
@@ -227,7 +240,7 @@ export class DisasterService implements OnModuleInit {
     if (JSON.stringify(nextEval) !== JSON.stringify(this.evalResult)) this.evalResult = nextEval
   }
 
-  private onTick(fleet: FleetState): void {
+  private async onTick(fleet: FleetState): Promise<void> {
     if (!this.flood || !this.situation) return
 
     // 现场观测：有盘旋勘测机才产生事件流
@@ -253,8 +266,22 @@ export class DisasterService implements OnModuleInit {
       const names = newDrops
         .map((id) => fleet.drones.find((d) => d.id === id)?.name ?? id)
         .join('、')
-      this.situation = recordDelivery(this.situation, newDrops.length * PACKS_PER_SORTIE)
-      const dropText = '投送组：' + names + ' 已在灾点上空空投（+' + newDrops.length * PACKS_PER_SORTIE + ' 件），正在返航'
+      const packs = newDrops.length * PACKS_PER_SORTIE
+      this.situation = recordDelivery(this.situation, packs)
+      // 投送件数实时扣减来源仓库存（台账同步）
+      let stockNote = ''
+      if (this.plan?.delivery) {
+        const siteName = this.plan.delivery.supplySiteName
+        const wh = await this.prisma.warehouse.findFirst({ where: { name: siteName } })
+        if (wh) {
+          const newStock = Math.max(0, wh.stock - packs)
+          await this.prisma.warehouse.update({ where: { id: wh.id }, data: { stock: newStock } }).catch(() => undefined)
+          stockNote = '，' + siteName + ' 余量 ' + newStock + ' 件'
+          const rows = await this.prisma.warehouse.findMany({ orderBy: { id: 'asc' } })
+          this.bus.emit('warehouses', rows.map((w) => ({ ...w, percent: Math.round((w.stock / w.capacity) * 100) })))
+        }
+      }
+      const dropText = '投送组：' + names + ' 已在灾点上空空投（+' + packs + ' 件）' + stockNote + '，正在返航'
       this.situation = {
         ...this.situation,
         events: [...this.situation.events, {
@@ -265,7 +292,7 @@ export class DisasterService implements OnModuleInit {
         }].slice(-30),
       }
       this.log.pushFeed('supply', dropText)
-      this.log.pushNode('空投完成', names + ' · 累计 ' + this.situation.deliveredPacks + ' 件物资', this.disasterId ?? undefined)
+      this.log.pushNode('空投完成', names + ' · 累计 ' + this.situation.deliveredPacks + ' 件物资' + stockNote, this.disasterId ?? undefined)
     }
 
     this.refreshEval(fleet)

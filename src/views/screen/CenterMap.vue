@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import AMapLoader from '@amap/amap-jsapi-loader'
 import { loadPublicConfig } from '@/api/config'
 import { useDrones } from '@/composables/useDrones'
@@ -43,8 +43,23 @@ const EMERGENCY_LAYERS: { key: EmergencyCategory; label: string; color: string; 
   { key: 'vehicles', label: '应急车辆', color: '#ff6b6b', icon: '🚒' },
 ]
 
-/** 模拟数据（确定性 seed，与无人机轨迹同范围） */
-const emergencyData = createEmergencyData(mulberry32(20260903))
+/** 应急资源数据：人员/车辆为模拟（确定性 seed）；物资点异步替换为仓储台账（与投送航线同源） */
+const emergencyData = reactive(createEmergencyData(mulberry32(20260903)))
+fetch('/api/warehouses')
+  .then((r) => (r.ok ? r.json() : null))
+  .then((rows) => {
+    if (!Array.isArray(rows) || rows.length === 0) return
+    emergencyData.supplies = rows.map((w: { id: number; name: string; org: string; items: string; stock: number; lng: number; lat: number }) => ({
+      id: 'supply-' + w.id,
+      category: 'supplies' as const,
+      name: w.name,
+      position: [w.lng, w.lat] as [number, number],
+      detail: w.items + ' · 库存 ' + w.stock + ' 件',
+      status: '可用',
+      org: w.org,
+    }))
+  })
+  .catch(() => undefined)
 
 /** 图层显隐：默认全部不显示 */
 const layerVisibility = ref<Record<EmergencyCategory, boolean>>({
@@ -187,6 +202,30 @@ function toggleLayer(key: EmergencyCategory) {
   for (const m of layerMarkers[key]) visible ? m.show() : m.hide()
 }
 
+/** 渲染应急资源图层（可重入：supplies 异步替换为仓储台账后重绘） */
+function renderEmergencyLayers() {
+  if (!map || !window.AMap) return
+  const AMap = window.AMap
+  for (const layer of EMERGENCY_LAYERS) {
+    for (const m of layerMarkers[layer.key]) map.remove(m)
+    layerMarkers[layer.key] = []
+    for (const p of emergencyData[layer.key]) {
+      const marker = new AMap.Marker({
+        map,
+        position: p.position,
+        content: emergencyMarkerHtml(p),
+        offset: new AMap.Pixel(-30, -20),
+      })
+      marker.on('click', () => openStaticInfo(emergencyInfoHtml(p), p.position))
+      if (!layerVisibility.value[layer.key]) marker.hide() // B6：尊重加载前的勾选
+      layerMarkers[layer.key].push(marker)
+    }
+  }
+}
+
+// 仓储台账坐标到达后重绘物资图层（与投送航线同源）
+watch(() => emergencyData.supplies, () => renderEmergencyLayers())
+
 async function initMap() {
   const config = await loadPublicConfig()
   const key = config.amapKey
@@ -233,19 +272,8 @@ async function initMap() {
     }
 
     // 应急资源图层（默认隐藏）
-    for (const layer of EMERGENCY_LAYERS) {
-      for (const p of emergencyData[layer.key]) {
-        const marker = new AMap.Marker({
-          map,
-          position: p.position,
-          content: emergencyMarkerHtml(p),
-          offset: new AMap.Pixel(-30, -20),
-        })
-        marker.on('click', () => openStaticInfo(emergencyInfoHtml(p), p.position))
-        if (!layerVisibility.value[layer.key]) marker.hide() // B6：尊重加载前的勾选
-        layerMarkers[layer.key].push(marker)
-      }
-    }
+    renderEmergencyLayers()
+  
 
     // 无人机初始 marker
     for (const d of drones.value) createDroneMarker(d)

@@ -115,7 +115,6 @@ function wireSocket(): void {
   s.on('node', (n: { title: string; detail: string; time: string }) => {
     nodeSeq += 1
     nodeRecords.value = appendCapped(nodeRecords.value, { seq: nodeSeq, ...n }, NODE_MAX)
-    pushFeed('disaster', '节点：' + n.title)
   })
   // 首次连接补历史
   s.on('history', (h: { feed: { kind: FeedKind; text: string; time: string }[]; nodes: { title: string; detail: string; time: string }[] }) => {

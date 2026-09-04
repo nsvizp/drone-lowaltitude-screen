@@ -6,6 +6,7 @@ import { useDisaster } from '@/composables/useDisaster'
 import { buildDispatchRows, buildWarehouseRows, type WarehouseRow } from '@/sim/dispatch-board'
 import { openWarehouses } from '@/api'
 import { computed, onMounted, ref } from 'vue'
+import { getSocket } from '@/api/socket'
 
 // ---------- 物资仓储（静态台账） + 物资调度（实时机队） ----------
 const { drones } = useDrones()
@@ -15,6 +16,10 @@ const { situation } = useDisaster()
 const warehouses = ref<WarehouseRow[]>(buildWarehouseRows())
 onMounted(async () => {
   warehouses.value = await openWarehouses(buildWarehouseRows())
+  // 空投后后端实时广播最新库存，仓储面板同步刷新
+  getSocket().on('warehouses', (rows: WarehouseRow[]) => {
+    warehouses.value = rows
+  })
 })
 
 const dispatch = computed(() =>
