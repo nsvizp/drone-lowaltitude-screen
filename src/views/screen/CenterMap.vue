@@ -6,6 +6,7 @@ import { useDrones } from '@/composables/useDrones'
 import { mulberry32, SHANGHAI_CENTER, type DroneState } from '@/sim/drone-sim'
 import { createEmergencyData, type EmergencyCategory, type EmergencyPoint } from '@/sim/emergency-data'
 import { useDisaster } from '@/composables/useDisaster'
+import { backendOnline } from '@/api/socket'
 import DispatchCard from '@/components/DispatchCard.vue'
 import SituationCard from '@/components/SituationCard.vue'
 import VideoFeed from '@/components/VideoFeed.vue'
@@ -437,9 +438,16 @@ onBeforeUnmount(() => {
         {{ l.icon }} {{ l.label }}
         <span class="center-map__layer-count">{{ emergencyData[l.key].length }}</span>
       </button>
+      <div
+        class="center-map__backend"
+        :class="{ 'center-map__backend--offline': !backendOnline }"
+        :title="backendOnline ? '后端在线：模拟/灾情数据来自服务端' : '后端离线：请检查后端服务（:3000）'"
+      >
+        {{ backendOnline ? '● 后端在线' : '○ 后端离线' }}
+      </div>
       <button
         class="center-map__disaster"
-        :disabled="disaster.active.value"
+        :disabled="disaster.active.value || !backendOnline"
         @click="disaster.simulateFlood"
       >
         {{ disaster.active.value ? '🔴 抢险进行中…' : '⚠ 模拟洪灾' }}
@@ -588,6 +596,28 @@ onBeforeUnmount(() => {
       font-size: 11px;
       color: var(--layer-color);
     }
+  }
+
+  &__backend {
+    margin-top: 4px;
+    padding: 3px 8px;
+    font-size: 11px;
+    color: #7ef29b;
+    background: rgba(46, 204, 113, 0.12);
+    border: 1px solid rgba(46, 204, 113, 0.4);
+    border-radius: 4px;
+    text-align: center;
+
+    &--offline {
+      color: #ff9b9b;
+      background: rgba(255, 59, 59, 0.15);
+      border-color: rgba(255, 59, 59, 0.5);
+      animation: backend-blink 1.2s ease-in-out infinite;
+    }
+  }
+
+  @keyframes backend-blink {
+    50% { opacity: 0.5; }
   }
 
   &__disaster {
