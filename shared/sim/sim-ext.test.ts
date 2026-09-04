@@ -93,7 +93,7 @@ describe('v4 方舱起飞投送（launchDrone）', () => {
     expect(docked).toBeDefined()
     expect(docked!.lng).toBeCloseTo(shelter[0], 3)
     expect(docked!.lat).toBeCloseTo(shelter[1], 3)
-    expect(docked!.battery).toBe(100) // 归舱满电
+    expect(docked!.batteryPct).toBe(100) // 归舱满电
   })
 
   it('归舱后不再计入在飞统计', () => {

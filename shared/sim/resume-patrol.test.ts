@@ -19,7 +19,7 @@ describe('勘测机返航后应重新上岗（修复卡死 bug）', () => {
     expect(fleet.drones.find((d) => d.id === 'drone-4')!.status).toBe('hovering')
     fleet = {
       ...fleet,
-      drones: fleet.drones.map((d) => (d.id === 'drone-4' ? { ...d, battery: 24 } : d)),
+      drones: fleet.drones.map((d) => (d.id === 'drone-4' ? { ...d, batteryPct: 20 } : d)),
     }
     // 盘旋低电 → 自动返航
     fleet = advanceFleet(fleet, routes, 5000)
@@ -40,7 +40,7 @@ describe('勘测机返航后应重新上岗（修复卡死 bug）', () => {
     expect(d4.status).toBe('flying')
     expect(d4.orbitCenter).toBeNull()
     expect(d4.plannedRoute).toBeNull()
-    expect(d4.battery).toBeGreaterThan(99)
+    expect(d4.batteryPct).toBeGreaterThan(99)
   })
 
   it('无巡逻航线的增援勘测机（R1）返航后保持归舱，不抛异常', () => {
@@ -50,7 +50,7 @@ describe('勘测机返航后应重新上岗（修复卡死 bug）', () => {
     fleet = launchDrone(fleet, { name: 'DJI-M350-R1', home: shelter, waypoints: [[121.5, 31.2]], taskName: '增援勘测', mission: 'survey' })
     for (let i = 0; i < 300; i++) fleet = advanceFleet(fleet, routes, 5000)
     expect(fleet.drones[0].status).toBe('hovering')
-    fleet = { ...fleet, drones: [{ ...fleet.drones[0], battery: 24 }] }
+    fleet = { ...fleet, drones: [{ ...fleet.drones[0], batteryPct: 20 }] }
     for (let i = 0; i < 300; i++) fleet = advanceFleet(fleet, routes, 5000)
     // 回舱后待命、不复活、不报错；超过保留期后被清理也属正常
     expect(fleet.drones.length === 0 || fleet.drones[0].status === 'docked').toBe(true)

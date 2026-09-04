@@ -33,7 +33,7 @@ export class FleetService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit(): void {
     this.timer = setInterval(() => {
-      this.fleet = advanceFleet(this.fleet, this.routes, TICK_MS * SIM_SPEED)
+      this.fleet = advanceFleet(this.fleet, this.routes, TICK_MS * SIM_SPEED, Date.now())
       for (const fn of this.listeners) fn(this.fleet)
     }, TICK_MS)
   }

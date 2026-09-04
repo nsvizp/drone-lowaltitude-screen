@@ -41,6 +41,41 @@ describe('transitionFeed 机队状态流转事件', () => {
     expect(events.some((e) => e.text.includes('归舱'))).toBe(true)
   })
 
+  it('按返航原因生成事件，不把正常返航误报为低电', () => {
+    const fleet = createFleet(routes, 1, mulberry32(54))
+    const prev = new Map<string, DronePrev>()
+    transitionFeed(fleet, prev)
+    const returning = {
+      ...fleet,
+      drones: [{
+        ...fleet.drones[0],
+        status: 'returning' as const,
+        returnReason: 'route_complete' as const,
+      }],
+    }
+    const events = transitionFeed(returning, prev)
+    expect(events[0].text).toContain('完成巡航')
+    expect(events[0].text).not.toContain('低电')
+  })
+
+  it('低电返航事件包含触发时的实时电量', () => {
+    const fleet = createFleet(routes, 1, mulberry32(55))
+    const prev = new Map<string, DronePrev>()
+    transitionFeed(fleet, prev)
+    const returning = {
+      ...fleet,
+      drones: [{
+        ...fleet.drones[0],
+        status: 'returning' as const,
+        batteryPct: 19.8,
+        returnReason: 'low_battery' as const,
+      }],
+    }
+    const events = transitionFeed(returning, prev)
+    expect(events[0].text).toContain('19.8%')
+    expect(events[0].text).toContain('自动返航')
+  })
+
   it('无人机被清理出机队时不产生事件且不报错', () => {
     const fleet = createFleet(routes, 2, mulberry32(53))
     const prev = new Map<string, DronePrev>()

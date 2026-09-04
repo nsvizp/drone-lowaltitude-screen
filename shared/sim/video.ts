@@ -16,7 +16,7 @@ export function getVideoSource(drone: DroneState): VideoSource {
 export function formatHudTelemetry(drone: DroneState): string[] {
   return [
     'ALT ' + drone.altitude + ' M',
-    'BAT ' + drone.battery.toFixed(1) + '%',
+    'BAT ' + drone.batteryPct.toFixed(1) + '%',
     'SPD ' + drone.speed.toFixed(1) + ' M/S',
     drone.lng.toFixed(4) + ', ' + drone.lat.toFixed(4),
   ]
@@ -24,9 +24,9 @@ export function formatHudTelemetry(drone: DroneState): string[] {
 
 /** 图传信号格数（1~5，演示：电量越高信号越好） */
 export function signalBars(drone: DroneState): number {
-  if (drone.battery >= 80) return 5
-  if (drone.battery >= 60) return 4
-  if (drone.battery >= 40) return 3
-  if (drone.battery >= 25) return 2
+  if (drone.batteryPct >= 80) return 5
+  if (drone.batteryPct >= 60) return 4
+  if (drone.batteryPct >= 40) return 3
+  if (drone.batteryPct >= 25) return 2
   return 1
 }

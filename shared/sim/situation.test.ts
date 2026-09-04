@@ -92,7 +92,7 @@ describe('evaluateReinforcement 二次调配评估', () => {
     f = divertDrone(f, 'drone-1', [121.59, 31.19], 'survey')
     f = {
       ...f,
-      drones: f.drones.map((d) => (d.id === 'drone-1' ? { ...d, battery: 22 } : d)),
+      drones: f.drones.map((d) => (d.id === 'drone-1' ? { ...d, batteryPct: 22 } : d)),
     }
     const s = initSituation({ ...flood, severity: 1 })
     const summary = summarizeSituation({ ...s, areaKm2: 0.3, trapped: 4 }, 2)

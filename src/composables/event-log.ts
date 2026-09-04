@@ -1,7 +1,7 @@
 import { ref } from 'vue'
 import { getSocket } from '@/api/socket'
 import { onFleetTick } from './useDrones'
-import type { FleetState, Mission } from '@/sim/drone-sim'
+import type { DroneState, FleetState, Mission } from '@/sim/drone-sim'
 
 export type FeedKind = 'system' | 'drone' | 'disaster' | 'supply' | 'field'
 
@@ -59,6 +59,23 @@ export interface DronePrev {
 
 const MISSION_LABEL: Record<Mission, string> = { patrol: '巡逻', survey: '勘测', delivery: '投送' }
 
+function returnEventText(drone: DroneState): string {
+  const battery = drone.batteryPct.toFixed(1) + '%'
+  if (drone.returnReason === 'low_battery') {
+    return drone.name + ' 电量 ' + battery + '，已自动返航'
+  }
+  if (drone.returnReason === 'route_complete') {
+    return drone.name + ' 完成巡航，正在返航 · 电量 ' + battery
+  }
+  if (drone.returnReason === 'mission_complete') {
+    return drone.name + ' 任务完成，正在返航 · 电量 ' + battery
+  }
+  if (drone.returnReason === 'manual_recall') {
+    return drone.name + ' 已人工召回 · 电量 ' + battery
+  }
+  return drone.name + ' 正在返航 · 电量 ' + battery
+}
+
 /**
  * 机队状态流转 → 例行动态事件（纯函数，可测）。
  * 传入当前机队与上一轮快照表，返回新事件并更新快照表。
@@ -82,9 +99,12 @@ export function transitionFeed(
       continue
     }
     if (p.status !== d.status) {
-      if (d.status === 'returning') events.push({ kind: 'drone', text: d.name + ' 低电返航' })
-      else if (d.status === 'docked') events.push({ kind: 'drone', text: d.name + ' 归舱充电' })
-      else if (p.status === 'docked' && d.status === 'flying') events.push({ kind: 'drone', text: d.name + ' 换电完毕，重新上岗' })
+      if (d.status === 'returning') events.push({ kind: 'drone', text: returnEventText(d) })
+      else if (d.status === 'docked') {
+        events.push({ kind: 'drone', text: d.name + ' 已归舱 · 电量 ' + d.batteryPct.toFixed(1) + '%' })
+      } else if (p.status === 'docked' && d.status === 'flying') {
+        events.push({ kind: 'drone', text: d.name + ' 换电完毕，重新上岗 · 电量 ' + d.batteryPct.toFixed(1) + '%' })
+      }
     }
     prev.set(d.id, { status: d.status, mission: d.mission })
   }

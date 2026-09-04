@@ -185,7 +185,9 @@ export function evaluateReinforcement(
   if (summary.trapped > TRAPPED_THRESHOLD) {
     reasons.push('被困人员估计 ' + summary.trapped + ' 人，超过阈值 ' + TRAPPED_THRESHOLD + ' 人')
   }
-  const surveyLow = fleet.drones.filter((d) => d.mission === 'survey' && d.status !== 'docked' && d.battery < SURVEY_LOW_BATTERY)
+  const surveyLow = fleet.drones.filter((d) =>
+    d.mission === 'survey' && d.status !== 'docked' && d.batteryPct < SURVEY_LOW_BATTERY,
+  )
   if (surveyLow.length > 0) {
     reasons.push('勘测机 ' + surveyLow.map((d) => d.name).join('、') + ' 电量低于 ' + SURVEY_LOW_BATTERY + '%')
   }

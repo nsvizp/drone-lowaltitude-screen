@@ -147,7 +147,7 @@ export function planFloodDispatch(
 
   // --- 勘测组 ---
   const candidates = fleet.drones
-    .filter((d: DroneState) => d.status === 'flying' && d.mission === 'patrol' && d.battery >= SURVEY_MIN_BATTERY)
+    .filter((d: DroneState) => d.status === 'flying' && d.mission === 'patrol' && d.batteryPct >= SURVEY_MIN_BATTERY)
     .map((d) => ({ d, dist: distanceMeters([d.lng, d.lat], flood.position) }))
     .sort((a, b) => a.dist - b.dist)
   const survey: SurveyAssignment[] = candidates.slice(0, SURVEY_TEAM_SIZE).map(({ d, dist }) => ({
@@ -155,7 +155,7 @@ export function planFloodDispatch(
     droneName: d.name,
     flyerNote: '原飞手保持操控',
     distanceKm: Math.round((dist / 1000) * 100) / 100,
-    battery: d.battery,
+    battery: d.batteryPct,
     etaSec: Math.round(dist / EMERGENCY_SPEED), // 改派后提速至应急速度，ETA 按实际口径
   }))
   if (survey.length < SURVEY_TEAM_SIZE) {
