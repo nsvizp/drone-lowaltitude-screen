@@ -29,6 +29,7 @@ interface DisasterSnapshot {
   reinforced: boolean
   planSource: 'ai' | 'algorithm' | null
   aiReasoning: string | null
+  aiSections: { tag: string; text: string }[] | null
 }
 
 // ---------- 模块级灾情状态（镜像服务端权威状态） ----------
@@ -41,6 +42,9 @@ const evalResult = ref<ReinforcementEval | null>(null)
 const reinforced = ref(false)
 const planSource = ref<'ai' | 'algorithm' | null>(null)
 const aiReasoning = ref<string | null>(null)
+const aiSections = ref<{ tag: string; text: string }[] | null>(null)
+/** 演示开关：大模型调度（关 = 直接用算法引擎兜底）；localStorage 持久化 */
+export const llmEnabled = ref(localStorage.getItem('drone-screen-llm') !== '0')
 /** 灾点地名（高德逆地理；失败回退最近行政区） */
 export const floodPlace = ref<string | null>(null)
 
@@ -103,6 +107,7 @@ function applySnapshot(s: DisasterSnapshot): void {
   reinforced.value = s.reinforced
   planSource.value = s.planSource ?? null
   aiReasoning.value = s.aiReasoning ?? null
+  aiSections.value = s.aiSections ?? null
 }
 
 function connect(): void {
@@ -125,7 +130,7 @@ export function useDisaster() {
     void authFetch('/api/disaster/simulate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type }),
+      body: JSON.stringify({ type, engine: llmEnabled.value ? 'ai' : 'algorithm' }),
     }).catch(() => undefined)
   }
 
@@ -148,12 +153,12 @@ export function useDisaster() {
   const closeVideo = () => { videoDroneId.value = null }
 
   // 调试/验收钩子（Playwright 探针）
-  ;(window as unknown as Record<string, unknown>).__DISASTER = { flood, plan, pendingPlan, situation, summaryRef, evalResult, planSource, aiReasoning, floodPlace, openVideo, closeVideo }
+  ;(window as unknown as Record<string, unknown>).__DISASTER = { flood, plan, pendingPlan, situation, summaryRef, evalResult, planSource, aiReasoning, aiSections, floodPlace, llmEnabled, openVideo, closeVideo }
 
   const active = computed(() => flood.value !== null)
 
   return {
-    flood, plan, pendingPlan, situation, summary: summaryRef, evalResult, reinforced, active, videoDroneId, planSource, aiReasoning, floodPlace,
+    flood, plan, pendingPlan, situation, summary: summaryRef, evalResult, reinforced, active, videoDroneId, planSource, aiReasoning, aiSections, floodPlace, llmEnabled,
     simulateFlood, executeDispatch, executeReinforcement, resolveDisaster, openVideo, closeVideo,
   }
 }

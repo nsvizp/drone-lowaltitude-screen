@@ -48,6 +48,8 @@ export class EventsGateway implements OnModuleInit {
     this.bus.on('node', (n) => this.server.emit('node', n))
     this.bus.on('disaster', (d) => this.server.emit('disaster', d))
     this.bus.on('warehouses', (w) => this.server.emit('warehouses', w))
+    // 大模型思维链/正文流式增量（推演监控）
+    this.bus.on('ai', (d) => this.server.emit('ai', d))
 
     // 新客户端连入：先鉴权，再补发当前状态与历史
     this.server.on('connection', (socket) => {

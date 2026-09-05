@@ -3,6 +3,8 @@
 interface PublicConfig {
   amapKey: string
   amapSecurityCode: string
+  /** 大模型 ID（空 = 未配置，走算法兜底） */
+  llmModel: string
 }
 
 let cached: PublicConfig | null = null
@@ -19,6 +21,7 @@ export async function loadPublicConfig(): Promise<PublicConfig> {
   cached = {
     amapKey: fromServer['amap.key'] ?? import.meta.env.VITE_AMAP_KEY ?? '',
     amapSecurityCode: fromServer['amap.securityCode'] ?? import.meta.env.VITE_AMAP_SECURITY_CODE ?? '',
+    llmModel: fromServer['llm.model'] ?? '',
   }
   return cached
 }

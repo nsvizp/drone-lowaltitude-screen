@@ -9,10 +9,11 @@ export class SimHostController {
     private readonly log: EventLogService,
   ) {}
 
-  /** 触发灾情模拟（前端「模拟洪灾/泥石流」按钮；body.type = flood | debris） */
+  /** 触发灾情模拟（body.type 灾种；body.engine='algorithm' 时跳过大模型直接用算法——演示开关） */
   @Post('disaster/simulate')
-  simulate(@Body('type') type?: 'flood' | 'debris' | 'fire') {
-    return this.disaster.simulateFlood(type === 'debris' ? 'debris' : type === 'fire' ? 'fire' : 'flood')
+  simulate(@Body('type') type?: 'flood' | 'debris' | 'fire', @Body('engine') engine?: string) {
+    const kind = type === 'debris' ? 'debris' : type === 'fire' ? 'fire' : 'flood'
+    return this.disaster.simulateFlood(kind, engine !== 'algorithm')
   }
 
   /** 指挥确认下达（两段式：simulate 生成草稿后由此执行） */

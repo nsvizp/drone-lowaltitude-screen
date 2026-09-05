@@ -32,6 +32,19 @@ describe('parseLlmPlanResponse 响应解析（防御性）', () => {
     expect(r!.surveyDroneIds).toEqual(['drone-1'])
   })
 
+  it('携带 sections（分节研判）时完整透出', () => {
+    const raw = '{"reasoning":"r","surveyDroneIds":["drone-1"],"supplySiteId":"supply-5002","shelterId":4002,"sections":[{"tag":"🔥 灾情研判","text":"火势向东蔓延"},{"tag":"📦 物资评估","text":"装备充足"}]}'
+    const r = parseLlmPlanResponse(raw, ctx)
+    expect(r!.sections).toHaveLength(2)
+    expect(r!.sections![0].text).toBe('火势向东蔓延')
+  })
+
+  it('sections 缺省或畸形 → 容忍（undefined，走脚本稿兜底）', () => {
+    const r = parseLlmPlanResponse('{"reasoning":"r","surveyDroneIds":["drone-1"],"supplySiteId":"supply-5002","shelterId":4002,"sections":"bad"}', ctx)
+    expect(r).not.toBeNull()
+    expect(r!.sections).toBeUndefined()
+  })
+
   it('裸 JSON 也能解析', () => {
     const r = parseLlmPlanResponse('{"reasoning":"r","surveyDroneIds":["drone-2"],"supplySiteId":"supply-5002","shelterId":4002}', ctx)
     expect(r!.surveyDroneIds).toEqual(['drone-2'])

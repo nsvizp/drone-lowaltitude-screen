@@ -29,7 +29,16 @@ const selected = ref<DroneState | null>(null)
 
 const { routes, drones, summary } = useDrones()
 const disaster = useDisaster()
+const { llmEnabled } = disaster
 const { activeFlightCase, clearFlightCase } = useFlightCases()
+
+/** 大模型调度开关（demo 演示用；关=算法兜底） */
+const llmModel = ref('')
+loadPublicConfig().then((c) => { llmModel.value = c.llmModel })
+function toggleLlm(): void {
+  llmEnabled.value = !llmEnabled.value
+  localStorage.setItem('drone-screen-llm', llmEnabled.value ? '1' : '0')
+}
 
 /** AI 推演面板引用：点击「模拟灾害」时触发（只执行一次） */
 const aiCardRef = ref<{ start: () => void } | null>(null)
@@ -572,6 +581,16 @@ onBeforeUnmount(() => {
       >
         {{ backendOnline ? '● 后端在线' : '○ 后端离线' }}
       </div>
+      <button
+        v-if="llmModel"
+        class="center-map__layer center-map__llm-toggle"
+        :class="{ 'center-map__layer--active': llmEnabled }"
+        :title="llmEnabled ? '大模型调度中（点击切算法兜底演示）' : '算法兜底演示中（点击切回大模型）'"
+        @click="toggleLlm"
+      >
+        <span class="center-map__layer-check">{{ llmEnabled ? '✓' : '' }}</span>
+        🧠 大模型调度
+      </button>
       <button
         class="center-map__disaster"
         :disabled="disaster.active.value || !backendOnline"

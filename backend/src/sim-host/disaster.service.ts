@@ -23,7 +23,7 @@ import {
   type SituationSummary,
 } from '../../../shared/sim/situation'
 import { distanceMeters, mulberry32, recallMissionDrones, type FleetState } from '../../../shared/sim/drone-sim'
-import { analyzeWithLlm, makeOpenAiClient, type LlmContext, type LlmClient } from './llm'
+import { analyzeWithLlm, makeOpenAiStreamClient, type LlmContext, type LlmClient } from './llm'
 import { latchReinforceEval } from '../../../shared/sim/eval-latch'
 import { createEmergencyData } from '../../../shared/sim/emergency-data'
 import { PrismaService } from '../prisma.service'
@@ -60,6 +60,8 @@ export interface DisasterSnapshot {
   planSource: 'ai' | 'algorithm' | null
   /** 大模型研判原文（ai 来源时有值，AI 卡展示） */
   aiReasoning: string | null
+  /** 大模型分节研判（灾情研判/物资评估/航线规划/综合结论） */
+  aiSections: { tag: string; text: string }[] | null
   situation: SituationState | null
   summary: SituationSummary | null
   eval: ReinforcementEval | null
@@ -75,6 +77,7 @@ export class DisasterService implements OnModuleInit {
   private pendingPlan: DispatchPlan | null = null
   private planSource: 'ai' | 'algorithm' | null = null
   private aiReasoning: string | null = null
+  private aiSections: { tag: string; text: string }[] | null = null
   /** 测试/外部注入的大模型客户端；为空时按 env（LLM_BASE_URL/LLM_API_KEY）创建 */
   llmClient?: LlmClient
   private situation: SituationState | null = null
@@ -104,6 +107,7 @@ export class DisasterService implements OnModuleInit {
       pendingPlan: this.pendingPlan,
       planSource: this.planSource,
       aiReasoning: this.aiReasoning,
+      aiSections: this.aiSections,
       situation: this.situation,
       summary: this.summary,
       eval: this.evalResult,
@@ -121,15 +125,54 @@ export class DisasterService implements OnModuleInit {
     }
   }
 
-  /** 模拟灾情（洪灾/泥石流）：随机灾点 → 调配引擎 → 改派勘测 + 方舱起飞投送 */
-  async simulateFlood(kind: DisasterKind = 'flood'): Promise<DisasterSnapshot> {
+  /** 选案就绪承诺（测试/前端可 await；草稿异步生成） */
+  planReady: Promise<void> | null = null
+
+  /**
+   * 灾情感知（即时返回）：灾点立即上图、事件流播报；
+   * 调配草稿异步生成（大模型推理约 15~30s，期间思维链经 WS 'ai' 实时推送）——
+   * 修复「点击模拟灾害长时间无反馈」的观感 bug。
+   */
+  simulateFlood(kind: DisasterKind = 'flood', useLlm = true): DisasterSnapshot {
     const currentDrones = this.fleet.drones
     if (currentDrones.length === 0) return this.getState()
     const rng = mulberry32(Date.now() % 100000)
     const floodEvent = createDisasterEvent(rng, FLOOD_AREA, 0, kind)
     const dName = DISASTER_NAME[kind]
+
+    // 感知阶段立即生效：灾点上图 + 机队按兵不动 + 等待指挥确认
+    this.flood = floodEvent
+    this.pendingPlan = null
+    this.plan = null
+    this.situation = null
+    this.summary = null
+    this.evalResult = null
+    this.reinforced = false
+    this.planSource = null
+    this.aiReasoning = null
+    this.prevLegs = new Map()
+    this.recordedDrops.clear()
+    this.surveyArrivedAnnounced = false
+
+    // 灾情档案入库（异步但不阻塞感知反馈）
+    void this.prisma.disasterEvent.create({
+      data: { severity: floodEvent.severity, lng: floodEvent.position[0], lat: floodEvent.position[1] },
+    }).then((rec) => { this.disasterId = rec.id }).catch(() => undefined)
+
+    this.log.pushNode('⚠ 灾情发生', SEVERITY_TEXT[floodEvent.severity] + dName + ' · ' + floodEvent.position[0].toFixed(4) + ', ' + floodEvent.position[1].toFixed(4), this.disasterId ?? undefined)
+    this.log.pushFeed('disaster', SEVERITY_TEXT[floodEvent.severity] + dName + '报警，推演生成抢险调配方案，等待指挥确认')
+    this.broadcastIfChanged()
+
+    // 异步选案：大模型优先（思维链实时广播），down/超时/非法 → 算法兜底
+    // useLlm=false（演示开关）→ 直接算法
+    this.planReady = this.generateDraftPlan(floodEvent, currentDrones, useLlm)
+    return this.getState()
+  }
+
+  /** 异步生成调配草稿（LLM/算法），完成即广播；灾情已被新模拟/结束覆盖则丢弃（stale 防护） */
+  private async generateDraftPlan(floodEvent: FloodEvent, currentDrones: FleetState['drones'], useLlm = true): Promise<void> {
     // 物资点 = 仓储台账（真实坐标 + 实时库存）；为空时回退模拟数据
-    const warehouses = await this.prisma.warehouse.findMany({ orderBy: { id: 'asc' } })
+    const warehouses = await this.prisma.warehouse.findMany({ orderBy: { id: 'asc' } }).catch(() => [])
     const supplies = warehouses.length > 0
       ? warehouses.map((w) => ({
           id: 'supply-' + w.id,
@@ -141,7 +184,6 @@ export class DisasterService implements OnModuleInit {
           org: w.org,
         }))
       : createEmergencyData(mulberry32(20260903)).supplies
-    // 大模型优先：给出研判与选案；down/超时/输出非法 → 算法兜底
     const llmCtx: LlmContext = {
       drones: currentDrones
         .filter((d) => d.status === 'flying' && d.mission === 'patrol')
@@ -152,42 +194,30 @@ export class DisasterService implements OnModuleInit {
       warehouses: supplies.map((s) => ({ id: s.id, name: s.name })),
       shelters: SHELTERS.map((s) => ({ id: s.id, name: s.name })),
     }
-    // 本地大模型（27B Q5 思维链推理约 15~30s），超时 60s 兜底；AI 卡推演动画覆盖该等待
-    const client = this.llmClient ?? makeOpenAiClient(floodEvent, llmCtx)
+    // 流式：思维链/正文 delta 实时广播给大屏；注入客户端（测试）走非流式
     const t0 = Date.now()
-    const llmPlan = client ? await analyzeWithLlm({ client, timeoutMs: 60000 }, floodEvent, llmCtx) : null
-    console.log('[llm] ' + (llmPlan ? 'ai 选案成功' : '回退算法') + ' 耗时 ' + ((Date.now() - t0) / 1000).toFixed(1) + 's', llmPlan ? '' : '(client=' + !!client + ')')
+    let llmPlan = null
+    if (!useLlm) {
+      console.log('[llm] 演示开关关闭，直接使用算法引擎')
+    } else if (this.llmClient) {
+      llmPlan = await analyzeWithLlm({ client: this.llmClient, timeoutMs: 120000 }, floodEvent, llmCtx)
+    } else {
+      const streamClient = makeOpenAiStreamClient(floodEvent, llmCtx, (d) => this.bus.emit('ai', d))
+      llmPlan = streamClient ? await analyzeWithLlm({ client: streamClient, timeoutMs: 120000 }, floodEvent, llmCtx) : null
+    }
+    console.log('[llm] ' + (llmPlan ? 'ai 选案成功' : '回退算法') + ' 耗时 ' + ((Date.now() - t0) / 1000).toFixed(1) + 's')
+
+    // stale 防护：灾情已被结束/新模拟覆盖 → 丢弃本次草稿
+    if (this.flood?.id !== floodEvent.id) return
 
     const fleetSnapshot: FleetState = { drones: currentDrones, tickCount: 0 }
     const dispatchPlan = planFloodDispatch(fleetSnapshot, SHELTERS, FLYERS, supplies, floodEvent,
       llmPlan ? { surveyDroneIds: llmPlan.surveyDroneIds, supplySiteId: llmPlan.supplySiteId, shelterId: llmPlan.shelterId } : undefined)
+    this.pendingPlan = dispatchPlan
     this.planSource = llmPlan ? 'ai' : 'algorithm'
     this.aiReasoning = llmPlan?.reasoning ?? null
-
-    // 两段式：先感知 + 生成调配草稿，机队按兵不动；指挥确认（executeDispatch）后才执行
-    this.flood = floodEvent
-    this.pendingPlan = dispatchPlan
-    this.plan = null
-    this.situation = null
-    this.summary = null
-    this.evalResult = null
-    this.reinforced = false
-    this.prevLegs = new Map()
-    this.recordedDrops.clear()
-    this.surveyArrivedAnnounced = false
-
-    // 灾情档案入库
-    const rec = await this.prisma.disasterEvent.create({
-      data: { severity: floodEvent.severity, lng: floodEvent.position[0], lat: floodEvent.position[1] },
-    })
-    this.disasterId = rec.id
-
-    // 事件日志：灾情节点 + 报警动态（等待指挥确认）
-    this.log.pushNode('⚠ 灾情发生', SEVERITY_TEXT[floodEvent.severity] + dName + ' · ' + floodEvent.position[0].toFixed(4) + ', ' + floodEvent.position[1].toFixed(4), this.disasterId)
-    this.log.pushFeed('disaster', SEVERITY_TEXT[floodEvent.severity] + dName + '报警，推演生成抢险调配方案，等待指挥确认')
-
+    this.aiSections = llmPlan?.sections ?? null
     this.broadcastIfChanged()
-    return this.getState()
   }
 
   /** 指挥确认下达：草稿生效——勘测机改派 + 方舱起飞投送 + 态势初始化 */

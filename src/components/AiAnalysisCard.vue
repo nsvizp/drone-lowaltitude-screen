@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { loadPublicConfig } from '@/api/config'
+import { getSocket } from '@/api/socket'
 import { useDisaster } from '@/composables/useDisaster'
 import { useDraggable } from '@/composables/useDraggable'
 import { aiReasoningPhase } from './ai-stage'
+import { formatPlace } from '@/sim/place-name'
 import { buildAiScript, buildConclusionNote, buildReinforceNote, buildSituationNote, type AiParagraph } from './ai-script'
 
 const rootRef = ref<HTMLElement | null>(null)
@@ -14,6 +17,28 @@ const disaster = useDisaster()
 const pendingPlan = disaster.pendingPlan
 const KIND_NAME: Record<string, string> = { flood: '洪灾', debris: '泥石流', fire: '火灾' }
 
+/** 确认弹框灾点：与横幅/研判同源（地名附近（坐标）） */
+const confirmPlaceText = computed(() =>
+  pendingPlan.value ? formatPlace(disaster.floodPlace.value, pendingPlan.value.flood.position) : '',
+)
+
+/** 大模型 ID（启动时从公开配置拉取） */
+const llmModel = ref('')
+/** 演示开关（与 useDisaster 同源） */
+const llmEnabled = disaster.llmEnabled
+/** 大模型实时流：思维链/正文增量（推演监控） */
+const llmStreamReasoning = ref('')
+const llmStreaming = ref(false)
+
+onMounted(async () => {
+  llmModel.value = (await loadPublicConfig()).llmModel
+  getSocket().on('ai', (d: { kind: 'reasoning' | 'content'; text: string }) => {
+    llmStreaming.value = true
+    if (d.kind === 'reasoning') llmStreamReasoning.value += d.text
+  })
+})
+onBeforeUnmount(() => { getSocket().off('ai') })
+
 const collapsed = ref(true)
 const playing = ref(false)
 const phase = ref<'idle' | 'thinking' | 'output' | 'done'>('idle')
@@ -21,7 +46,7 @@ const thinking = ref<string[]>([])
 const output = ref<{ tag: string; text: string }[]>([])
 const confirmOpen = ref(false)
 
-/** 初幕推演稿：与调配单同源；大模型研判原文（如有）作为首段展示 */
+/** 初幕推演稿：大模型方案 → 分节研判为模型原文直出；否则脚本稿（与调配单同源） */
 function buildScript(): { think: string[]; paras: AiParagraph[] } {
   const { think, paras } = buildAiScript({
     flood: disaster.flood.value,
@@ -31,8 +56,26 @@ function buildScript(): { think: string[]; paras: AiParagraph[] } {
     placeName: disaster.floodPlace.value,
   })
   const reasoning = disaster.aiReasoning?.value
+  const sections = disaster.aiSections?.value
+  // 大模型在线：各段直接展示模型输出（灾情研判/物资评估/航线规划/综合结论）
+  if (disaster.planSource.value === 'ai' && sections && sections.length > 0) {
+    const llmParas: AiParagraph[] = sections.map((s) => ({ tag: '🧠 ' + s.tag, text: s.text }))
+    if (reasoning) llmParas.unshift({ tag: '🧠 大模型研判', text: reasoning })
+    return { think, paras: llmParas }
+  }
   if (reasoning) paras.unshift({ tag: '🧠 大模型研判', text: reasoning })
   return { think, paras }
+}
+
+/** 等大模型方案就绪（pendingPlan 或来源标记）；开关关闭/未配置时立即返回 */
+async function waitForPlanSource(): Promise<void> {
+  if (!llmModel.value || !llmEnabled.value) return
+  const deadline = Date.now() + 70000
+  while (Date.now() < deadline) {
+    if (disaster.planSource.value || !disaster.flood.value) return
+    await delay(500)
+    if (!playing.value) return
+  }
 }
 
 // ---------- 播放动画（可取消的异步脚本） ----------
@@ -81,16 +124,20 @@ async function runScript(): Promise<void> {
   output.value = []
   phase.value = 'thinking'
 
-  const { think, paras } = buildScript()
+  // 思考行先行（大模型在线时思考区由实时思维链接管展示）
+  const { think } = buildScript()
   for (const line of think) {
     if (!playing.value) return
     thinking.value.push(line)
     await delay(420 + Math.random() * 380)
   }
+  // 等大模型方案就绪（实时推演监控：思维链播完 + 草稿到达），再输出研判段落
+  await waitForPlanSource()
   if (!playing.value) return
   await delay(320)
   if (!playing.value) return
   phase.value = 'output'
+  const { paras } = buildScript()
   for (const p of paras) {
     if (!playing.value) return
     await typeParagraph(p)
@@ -136,6 +183,8 @@ function start(): void {
   phase.value = 'idle'
   confirmOpen.value = false
   aiReasoningPhase.value = 'running'
+  llmStreamReasoning.value = ''
+  llmStreaming.value = false
   const begin = () => { playing.value = true; void runScript() }
   if (disaster.flood.value) { begin(); return }
   const unwatch = watch(disaster.flood, (f) => { if (f) { unwatch(); begin() } })
@@ -222,7 +271,7 @@ onBeforeUnmount(() => { stop() })
 <template>
   <div ref="rootRef" class="ai-card">
     <div ref="dragHandleRef" class="ai-card__bar ai-card__drag">
-      <span class="ai-card__model">⋮⋮ 🧠 应急决策大模型</span>
+      <span class="ai-card__model">⋮⋮ 🧠 应急决策大模型<template v-if="llmModel"> · {{ llmModel }}</template></span>
       <span v-if="disaster.planSource.value === 'ai'" class="ai-card__source ai-card__source--ai">大模型选案</span>
       <span v-else-if="disaster.planSource.value === 'algorithm'" class="ai-card__source">算法兜底</span>
       <span class="ai-card__status" :data-phase="phase">{{ statusText }}</span>
@@ -244,7 +293,13 @@ onBeforeUnmount(() => { stop() })
           <span v-if="playing && phase === 'thinking'" class="ai-card__spinner" />
           {{ playing && phase === 'thinking' ? '思考中…' : '推演过程' }}
         </div>
-        <ul class="ai-card__think-list">
+        <div v-if="disaster.flood.value && !disaster.pendingPlan.value && !llmStreamReasoning && llmModel" class="ai-card__think-stream ai-card__think-stream--wait">
+          <span class="ai-card__spinner" /> 等待 {{ llmModel }} 响应，推演监控就绪…
+        </div>
+        <div v-else-if="llmStreamReasoning" class="ai-card__think-stream">
+          <span class="ai-card__think-dot">▍</span>{{ llmStreamReasoning }}<span class="ai-card__caret" />
+        </div>
+        <ul v-else class="ai-card__think-list">
           <li v-for="(t, i) in thinking" :key="i" class="ai-card__think-line">
             <span class="ai-card__think-dot">▍</span>{{ t }}
           </li>
@@ -262,9 +317,7 @@ onBeforeUnmount(() => { stop() })
             />
           </span>
         </div>
-        <div v-if="!playing && output.length === 0 && thinking.length === 0" class="ai-card__empty">
-          点击地图「模拟灾害」按钮，大模型将执行一次灾情推演
-        </div>
+
       </div>
     </div>
   </div>
@@ -279,7 +332,7 @@ onBeforeUnmount(() => { stop() })
         </div>
         <div class="dispatch-confirm__meta">
           {{ 'ⅠⅡⅢ'[pendingPlan.flood.severity - 1] }} 级{{ KIND_NAME[pendingPlan.flood.kind] }}
-          · 灾点（{{ pendingPlan.flood.position[0].toFixed(4) }}, {{ pendingPlan.flood.position[1].toFixed(4) }}）
+          · 灾点 {{ confirmPlaceText }}
         </div>
 
         <div class="dispatch-confirm__group">
@@ -433,6 +486,29 @@ onBeforeUnmount(() => { stop() })
   }
 
   @keyframes ai-spin { to { transform: rotate(360deg); } }
+
+  &__think-stream {
+    font-size: 11px;
+    line-height: 1.6;
+    color: #b78cff;
+    background: rgba(183, 140, 255, 0.06);
+    border: 1px solid rgba(183, 140, 255, 0.25);
+    border-radius: 4px;
+    padding: 6px 8px;
+    margin-bottom: 8px;
+    max-height: 160px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    font-family: monospace;
+  }
+
+  &__think-stream--wait {
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
 
   &__think-list {
     list-style: none;

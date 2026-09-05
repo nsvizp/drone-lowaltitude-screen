@@ -24,17 +24,29 @@ function makeService(): { svc: DisasterService; fleet: FleetService } {
 describe('两段式灾情指挥（感知草稿 → 确认执行）', () => {
   it('simulate 只产 pendingPlan：不动机队、不起态势、plan 为空', async () => {
     const { svc, fleet } = makeService()
-    const s = await svc.simulateFlood('flood')
+    const s = svc.simulateFlood('flood')
     expect(s.flood).not.toBeNull()
-    expect(s.pendingPlan).not.toBeNull()      // 草稿已生成
-    expect(s.plan).toBeNull()                 // 但未生效
-    expect(s.situation).toBeNull()            // 态势未初始化
-    expect(fleet.drones.every((d) => d.mission === 'patrol')).toBe(true) // 无机改派
+    expect(s.pendingPlan).toBeNull()          // 草稿异步生成中（感知先行）
+    expect(s.plan).toBeNull()
+    expect(s.situation).toBeNull()
+    expect(fleet.drones.every((d) => d.mission === 'patrol')).toBe(true)
+    await svc.planReady                       // 等异步选案完成
+    expect(svc.getState().pendingPlan).not.toBeNull()
+  })
+
+  it('模拟后灾情立即上图（不等 LLM）——修复「点击不生效」观感', () => {
+    const { svc } = makeService()
+    const before = Date.now()
+    const s = svc.simulateFlood('flood')
+    expect(Date.now() - before).toBeLessThan(100) // 同步返回
+    expect(s.flood).not.toBeNull()
+    void svc.planReady
   })
 
   it('executeDispatch 确认后：草稿生效、勘测机改派、态势初始化', async () => {
     const { svc, fleet } = makeService()
-    await svc.simulateFlood('flood')
+    svc.simulateFlood('flood')
+    await svc.planReady
     const s = svc.executeDispatch()
     expect(s.pendingPlan).toBeNull()
     expect(s.plan).not.toBeNull()
@@ -51,7 +63,8 @@ describe('两段式灾情指挥（感知草稿 → 确认执行）', () => {
 
   it('resolve 清理草稿（未确认就结束演练）', async () => {
     const { svc } = makeService()
-    await svc.simulateFlood('debris')
+    svc.simulateFlood('debris')
+    await svc.planReady
     const s = await svc.resolveDisaster()
     expect(s.pendingPlan).toBeNull()
     expect(s.flood).toBeNull()
@@ -64,7 +77,9 @@ describe('两段式灾情指挥（感知草稿 → 确认执行）', () => {
       reasoning: '火势向东蔓延，建议就近压制',
       surveyDroneIds: firstTwo, supplySiteId: 'supply-1', shelterId: 4002,
     }) })
-    const s = await svc.simulateFlood('fire')
+    svc.simulateFlood('fire')
+    await svc.planReady
+    const s = svc.getState()
     expect(s.planSource).toBe('ai')
     expect(s.aiReasoning).toContain('火势')
     expect(s.pendingPlan!.survey.map((x) => x.droneId).sort()).toEqual([...firstTwo].sort())
@@ -73,23 +88,40 @@ describe('两段式灾情指挥（感知草稿 → 确认执行）', () => {
   it('大模型 down（抛错）：回退算法选案 + planSource=algorithm', async () => {
     const { svc } = makeService()
     svc.llmClient = async () => { throw new Error('ECONNREFUSED') }
-    const s = await svc.simulateFlood('flood')
+    svc.simulateFlood('flood')
+    await svc.planReady
+    const s = svc.getState()
     expect(s.planSource).toBe('algorithm')
     expect(s.aiReasoning).toBeNull()
     expect(s.pendingPlan).not.toBeNull()
     expect(s.pendingPlan!.survey.length).toBeGreaterThan(0)
   })
 
+  it('演示开关 useLlm=false：有大模型也走算法（LLM 不被调用）', async () => {
+    const { svc } = makeService()
+    let called = false
+    svc.llmClient = async () => { called = true; return { content: '{"reasoning":"r","surveyDroneIds":["drone-1"],"supplySiteId":"supply-1","shelterId":4001}' } }
+    svc.simulateFlood('flood', false)
+    await svc.planReady
+    const s = svc.getState()
+    expect(called).toBe(false)
+    expect(s.planSource).toBe('algorithm')
+    expect(s.pendingPlan).not.toBeNull()
+  })
+
   it('大模型输出非法（引用不存在的机）：同样回退算法', async () => {
     const { svc } = makeService()
     svc.llmClient = async () => ({ content: '{"reasoning":"r","surveyDroneIds":["ghost"],"supplySiteId":"x","shelterId":1}' })
-    const s = await svc.simulateFlood('flood')
+    svc.simulateFlood('flood')
+    await svc.planReady
+    const s = svc.getState()
     expect(s.planSource).toBe('algorithm')
   })
 
   it('确认后增援评估链路不受影响（execute → reinforce 可用）', async () => {
     const { svc } = makeService()
-    await svc.simulateFlood('fire')
+    svc.simulateFlood('fire')
+    await svc.planReady
     svc.executeDispatch()
     // 增援需要 evalResult.needed，由 tick 评估产生；此处验证 plan 携带 flood 引用即可
     const s = svc.getState()
