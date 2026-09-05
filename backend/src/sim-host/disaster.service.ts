@@ -2,15 +2,20 @@ import { Injectable, OnModuleInit } from '@nestjs/common'
 import {
   buildReinforcement,
   createDisasterEvent,
+  DELIVERY_TEAM_SIZE,
   DISASTER_NAME,
+  isSurveyDroneDispatchable,
   pickShelters,
   planFloodDispatch,
+  SURVEY_MIN_BATTERY,
+  SURVEY_TEAM_SIZE,
   type DisasterKind,
   type DispatchPlan,
   type FloodEvent,
   type FlyerInfo,
   type ShelterInfo,
 } from '../../../shared/sim/disaster'
+import type { AiDecisionResult, AiDecisionStatus, EmergencyDecisionContext } from '../../../shared/sim/ai-decision'
 import {
   assessSituation,
   detectSupplyDrops,
@@ -22,12 +27,13 @@ import {
   type SituationState,
   type SituationSummary,
 } from '../../../shared/sim/situation'
-import { mulberry32, recallMissionDrones, type FleetState } from '../../../shared/sim/drone-sim'
+import { distanceMeters, EMERGENCY_SPEED, mulberry32, type FleetState } from '../../../shared/sim/drone-sim'
 import { createEmergencyData } from '../../../shared/sim/emergency-data'
 import { PrismaService } from '../prisma.service'
 import { EventBus } from './event-bus'
 import { EventLogService } from './event-log.service'
 import { FleetService } from './fleet.service'
+import { AiDecisionService } from './ai-decision.service'
 
 /** 洪灾演练区域（市区核心，保证应急响应在 1~2 分钟内到场） */
 const FLOOD_AREA = { minLng: 121.42, maxLng: 121.62, minLat: 31.16, maxLat: 31.26 }
@@ -43,19 +49,22 @@ const SHELTERS: ShelterInfo[] = [
   { id: 4004, name: '4号方舱', position: [121.333, 31.2], spareDrones: 1 },
 ]
 const FLYERS: FlyerInfo[] = [
-  { id: 3001, name: '张三', lastMission: '2026-05-13 07:50' },
-  { id: 3002, name: '李四', lastMission: '2026-05-13 15:40' },
-  { id: 3003, name: '王五', lastMission: '2026-05-12 20:10' },
-  { id: 3004, name: '赵六', lastMission: '2026-05-12 11:25' },
+  { id: 3001, name: '张三', lastMission: '2026-05-13 07:50', status: 'available' },
+  { id: 3002, name: '李四', lastMission: '2026-05-13 15:40', status: 'available' },
+  { id: 3003, name: '王五', lastMission: '2026-05-12 20:10', status: 'available' },
+  { id: 3004, name: '赵六', lastMission: '2026-05-12 11:25', status: 'offline' },
 ]
 
 export interface DisasterSnapshot {
   flood: FloodEvent | null
   plan: DispatchPlan | null
+  pendingPlan: DispatchPlan | null
   situation: SituationState | null
   summary: SituationSummary | null
   eval: ReinforcementEval | null
   reinforced: boolean
+  aiStatus: AiDecisionStatus
+  aiDecision: AiDecisionResult | null
 }
 
 /** 权威灾情编排：灾点生成 → 调配 → 现场态势 → 空投登记 → 增援评估 */
@@ -64,10 +73,13 @@ export class DisasterService implements OnModuleInit {
   private flood: FloodEvent | null = null
   private disasterId: number | null = null
   private plan: DispatchPlan | null = null
+  private pendingPlan: DispatchPlan | null = null
   private situation: SituationState | null = null
   private summary: SituationSummary | null = null
   private evalResult: ReinforcementEval | null = null
   private reinforced = false
+  private aiStatus: AiDecisionStatus = 'idle'
+  private aiDecision: AiDecisionResult | null = null
   private prevLegs = new Map<string, number>()
   private readonly recordedDrops = new Set<string>()
   private surveyArrivedAnnounced = false
@@ -78,6 +90,7 @@ export class DisasterService implements OnModuleInit {
     private readonly log: EventLogService,
     private readonly bus: EventBus,
     private readonly prisma: PrismaService,
+    private readonly ai: AiDecisionService,
   ) {}
 
   onModuleInit(): void {
@@ -88,10 +101,13 @@ export class DisasterService implements OnModuleInit {
     return {
       flood: this.flood,
       plan: this.plan,
+      pendingPlan: this.pendingPlan,
       situation: this.situation,
       summary: this.summary,
       eval: this.evalResult,
       reinforced: this.reinforced,
+      aiStatus: this.aiStatus,
+      aiDecision: this.aiDecision,
     }
   }
 
@@ -105,8 +121,8 @@ export class DisasterService implements OnModuleInit {
     }
   }
 
-  /** 模拟灾情（洪灾/泥石流）：随机灾点 → 调配引擎 → 改派勘测 + 方舱起飞投送 */
-  async simulateFlood(kind: DisasterKind = 'flood'): Promise<DisasterSnapshot> {
+  /** 模拟灾情：生成规则候选方案和大模型解释，等待指挥确认后才执行。 */
+  async simulateFlood(kind: DisasterKind = 'flood', forceRuleFallback = false): Promise<DisasterSnapshot> {
     const currentDrones = this.fleet.drones
     if (currentDrones.length === 0) return this.getState()
     const rng = mulberry32(Date.now() % 100000)
@@ -128,25 +144,15 @@ export class DisasterService implements OnModuleInit {
     const fleetSnapshot: FleetState = { drones: currentDrones, tickCount: 0 }
     const dispatchPlan = planFloodDispatch(fleetSnapshot, SHELTERS, FLYERS, supplies, floodEvent)
 
-    for (const s of dispatchPlan.survey) this.fleet.divert(s.droneId, floodEvent.position, 'survey')
-    if (dispatchPlan.delivery) {
-      const d = dispatchPlan.delivery
-      for (let i = 0; i < d.droneCount; i++) {
-        this.fleet.launch({
-          home: d.legs[0],
-          waypoints: d.legs.slice(1),
-          taskName: dName + '物资投送 · ' + d.supplySiteName,
-          mission: 'delivery',
-        })
-      }
-    }
-
     this.flood = floodEvent
-    this.plan = dispatchPlan
+    this.plan = null
+    this.pendingPlan = dispatchPlan
     this.situation = initSituation(floodEvent)
-    this.summary = null
+    this.summary = summarizeSituation(this.situation, dispatchPlan.survey.length)
     this.evalResult = null
     this.reinforced = false
+    this.aiStatus = 'analyzing'
+    this.aiDecision = null
     this.prevLegs = new Map()
     this.recordedDrops.clear()
     this.surveyArrivedAnnounced = false
@@ -157,11 +163,94 @@ export class DisasterService implements OnModuleInit {
     })
     this.disasterId = rec.id
 
-    // 事件日志：灾情节点 + 初次调配节点 + 报警动态
+    // 先记录灾情感知；调配节点在人工确认后写入。
     this.log.pushNode('⚠ 灾情发生', SEVERITY_TEXT[floodEvent.severity] + dName + ' · ' + floodEvent.position[0].toFixed(4) + ', ' + floodEvent.position[1].toFixed(4), this.disasterId)
-    this.log.pushNode('初次调配下达', dispatchPlan.survey.length + ' 架勘测机改派 · ' + (dispatchPlan.delivery ? dispatchPlan.delivery.shelterName + ' ' + dispatchPlan.delivery.droneCount + ' 架投送 ' + dispatchPlan.delivery.droneCount * PACKS_PER_SORTIE + ' 件物资' : '无投送'), this.disasterId)
-    this.log.pushFeed('disaster', SEVERITY_TEXT[floodEvent.severity] + dName + '报警，抢险勘测与物资投送启动')
+    this.log.pushFeed('disaster', SEVERITY_TEXT[floodEvent.severity] + dName + '报警，正在生成辅助决策方案')
 
+    this.broadcastIfChanged()
+
+    const emergency = createEmergencyData(mulberry32(20260903))
+    const selectedFlyers = new Set(dispatchPlan.delivery?.flyers ?? [])
+    const countByStatus = (rows: { status: string }[]): Record<string, number> => rows.reduce<Record<string, number>>((result, row) => {
+      result[row.status] = (result[row.status] ?? 0) + 1
+      return result
+    }, {})
+    const context: EmergencyDecisionContext = {
+      disaster: floodEvent,
+      situation: this.situation,
+      candidatePlan: dispatchPlan,
+      fleet: currentDrones.map(({ id, name, status, mission, batteryPct, lng, lat, routeName }) => ({
+        id, name, status, mission, batteryPct, lng, lat, routeName,
+      })),
+      resources: {
+        supplies: warehouses.length > 0
+          ? warehouses.map((row) => ({ name: row.name, detail: row.items, stock: row.stock, status: '可用' }))
+          : emergency.supplies.map(({ name, detail, status }) => ({ name, detail, status })),
+        operators: FLYERS.map((flyer) => ({
+          id: flyer.id,
+          name: flyer.name,
+          status: selectedFlyers.has(flyer.name) ? '拟调度' : flyer.status === 'offline' ? '离线' : '可调度',
+          lastMission: flyer.lastMission,
+        })),
+        personnel: countByStatus(emergency.personnel),
+        vehicles: countByStatus(emergency.vehicles),
+      },
+      constraints: {
+        surveyMinBattery: SURVEY_MIN_BATTERY,
+        surveyTeamSize: SURVEY_TEAM_SIZE,
+        deliveryTeamSize: DELIVERY_TEAM_SIZE,
+        humanConfirmationRequired: true,
+      },
+    }
+    const decision = await this.ai.analyze(context, { forceRuleFallback })
+    // 如果分析期间演练已结束或新灾情已覆盖，则丢弃过期结果。
+    if (this.flood !== floodEvent) return this.getState()
+    this.aiDecision = decision
+    this.aiStatus = decision.source === 'model' ? 'ready' : 'fallback'
+    this.log.pushFeed('ai', decision.source === 'model'
+      ? '应急决策模型分析完成，等待指挥确认'
+      : '模型暂不可用，已启用规则方案等待指挥确认')
+    this.broadcastIfChanged()
+    return this.getState()
+  }
+
+  /** 人工确认后执行待调配方案；重复调用不会重复起飞。 */
+  executeDispatch(): DisasterSnapshot {
+    if (!this.flood || !this.pendingPlan || this.plan) return this.getState()
+    this.refreshPendingTelemetry(this.fleet.getSnapshot())
+    const nextPlan = this.pendingPlan
+    const unavailable = nextPlan.survey.filter((assignment) => {
+      const drone = this.fleet.drones.find((item) => item.id === assignment.droneId)
+      return !drone || !isSurveyDroneDispatchable(drone)
+    })
+    if (unavailable.length > 0) {
+      const staleWarning = '候选勘测机状态已变化，请重新发起灾情分析'
+      this.pendingPlan = {
+        ...nextPlan,
+        warnings: nextPlan.warnings.includes(staleWarning) ? nextPlan.warnings : [...nextPlan.warnings, staleWarning],
+      }
+      this.log.pushFeed('disaster', '调配未执行：候选勘测机状态已变化')
+      this.broadcastIfChanged()
+      return this.getState()
+    }
+
+    for (const assignment of nextPlan.survey) this.fleet.divert(assignment.droneId, this.flood.position, 'survey')
+    if (nextPlan.delivery) {
+      const delivery = nextPlan.delivery
+      for (let i = 0; i < delivery.droneCount; i++) {
+        this.fleet.launch({
+          home: delivery.legs[0],
+          waypoints: delivery.legs.slice(1),
+          taskName: DISASTER_NAME[this.flood.kind] + '物资投送 · ' + delivery.supplySiteName,
+          mission: 'delivery',
+        })
+      }
+    }
+
+    this.plan = nextPlan
+    this.pendingPlan = null
+    this.log.pushNode('初次调配下达', nextPlan.survey.length + ' 架勘测机改派 · ' + (nextPlan.delivery ? nextPlan.delivery.shelterName + ' ' + nextPlan.delivery.droneCount + ' 架投送 ' + nextPlan.delivery.droneCount * PACKS_PER_SORTIE + ' 件物资' : '无投送'), this.disasterId ?? undefined)
+    this.log.pushFeed('disaster', '指挥确认调配，抢险勘测与物资投送启动')
     this.broadcastIfChanged()
     return this.getState()
   }
@@ -223,10 +312,13 @@ export class DisasterService implements OnModuleInit {
     this.fleet.recallAll()
     this.flood = null
     this.plan = null
+    this.pendingPlan = null
     this.situation = null
     this.summary = null
     this.evalResult = null
     this.reinforced = false
+    this.aiStatus = 'idle'
+    this.aiDecision = null
     this.disasterId = null
     this.prevLegs = new Map()
     this.recordedDrops.clear()
@@ -248,6 +340,12 @@ export class DisasterService implements OnModuleInit {
 
   private async onTick(fleet: FleetState): Promise<void> {
     if (!this.flood || !this.situation) return
+    if (!this.plan) {
+      // 模型分析期间机队仍在飞行，持续刷新确认框中的实时遥测。
+      this.refreshPendingTelemetry(fleet)
+      this.broadcastIfChanged()
+      return
+    }
 
     // 现场观测：有盘旋勘测机才产生事件流
     const surveyor = fleet.drones.find((d) => d.mission === 'survey' && d.status === 'hovering')
@@ -302,5 +400,24 @@ export class DisasterService implements OnModuleInit {
     }
 
     this.refreshEval(fleet)
+  }
+
+  /** 保留模型已评估的候选机编号，仅用最新遥测刷新距离、电量与 ETA。 */
+  private refreshPendingTelemetry(fleet: FleetState): void {
+    if (!this.pendingPlan || !this.flood) return
+    this.pendingPlan = {
+      ...this.pendingPlan,
+      survey: this.pendingPlan.survey.map((assignment) => {
+        const drone = fleet.drones.find((item) => item.id === assignment.droneId)
+        if (!drone) return assignment
+        const distanceKm = distanceMeters([drone.lng, drone.lat], this.flood!.position) / 1000
+        return {
+          ...assignment,
+          distanceKm: Math.round(distanceKm * 100) / 100,
+          battery: Math.round(drone.batteryPct * 10) / 10,
+          etaSec: Math.round(distanceKm * 1000 / EMERGENCY_SPEED),
+        }
+      }),
+    }
   }
 }

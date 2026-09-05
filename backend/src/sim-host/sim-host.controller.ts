@@ -9,10 +9,20 @@ export class SimHostController {
     private readonly log: EventLogService,
   ) {}
 
-  /** 触发灾情模拟（前端「模拟洪灾/泥石流」按钮；body.type = flood | debris） */
+  /** 触发灾情模拟；forceRuleFallback 仅用于演示规则算法兜底。 */
   @Post('disaster/simulate')
-  simulate(@Body('type') type?: 'flood' | 'debris' | 'fire') {
-    return this.disaster.simulateFlood(type === 'debris' ? 'debris' : type === 'fire' ? 'fire' : 'flood')
+  simulate(@Body() body: { type?: 'flood' | 'debris' | 'fire'; forceRuleFallback?: boolean }) {
+    const type = body?.type
+    return this.disaster.simulateFlood(
+      type === 'debris' ? 'debris' : type === 'fire' ? 'fire' : 'flood',
+      body?.forceRuleFallback === true,
+    )
+  }
+
+  /** 指挥确认后执行规则引擎生成的待调配方案。 */
+  @Post('disaster/execute')
+  execute() {
+    return this.disaster.executeDispatch()
   }
 
   /** 执行二次增援（前端「执行增援」按钮） */

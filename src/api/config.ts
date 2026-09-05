@@ -1,4 +1,4 @@
-/** 启动期公开配置：后端 /api/config/public 优先，.env.local 兜底（后端未起时可离线开发） */
+/** 启动期公开配置：本地环境变量优先，后端公开配置兜底 */
 
 interface PublicConfig {
   amapKey: string
@@ -17,8 +17,9 @@ export async function loadPublicConfig(): Promise<PublicConfig> {
     // 后端未启动：静默回退到本地 env
   }
   cached = {
-    amapKey: fromServer['amap.key'] ?? import.meta.env.VITE_AMAP_KEY ?? '',
-    amapSecurityCode: fromServer['amap.securityCode'] ?? import.meta.env.VITE_AMAP_SECURITY_CODE ?? '',
+    // 本地开发密钥只保存在 Git 忽略的 .env.local 中，避免写入受版本控制的数据库。
+    amapKey: import.meta.env.VITE_AMAP_KEY || fromServer['amap.key'] || '',
+    amapSecurityCode: import.meta.env.VITE_AMAP_SECURITY_CODE || fromServer['amap.securityCode'] || '',
   }
   return cached
 }

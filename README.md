@@ -18,6 +18,7 @@
 | 二次调配 | 增援评估规则引擎（覆盖不足/水位连涨/被困超阈/电量红线）→ 结论卡 + 一键增援；「结束演练」撤机归档可重复演练 |
 | 实时视频 | 点击无人机 →「观看实时视频」→ 模拟 FPV 小窗（HUD 遥测实时联动，预留 FLV 真流接口） |
 | 实时轨迹 | 航迹尾线渐隐；改派/投送时计划航线动态切换为虚线指向目标 |
+| 大模型决策 | 规则引擎先生成可执行候选方案，百炼模型负责结构化分析与风险解释，人工确认后才执行；模型异常自动规则兜底 |
 
 ## 快速开始
 
@@ -31,10 +32,12 @@ pnpm install
 pnpm dev                       # http://127.0.0.1:5173
 ```
 
+后端大模型配置：复制 `backend/.env.example` 为 `backend/.env.local`，填写百炼 API Key。真实密钥不得提交到 Git。
+
 > 数据库为 SQLite 单文件 backend/data/app.db（已提交，含 admin 账号/高德 Key/台账种子数据）；
 > 如需重置：删除该文件后执行 pnpm exec prisma migrate dev && pnpm seed。
 
-> 配置优先级：后端 /api/config/public（数据库 system_config 表）> .env.local（后端未启动时的离线兜底）。
+> 高德配置优先级：前端 .env.local > 后端 /api/config/public（数据库 system_config 表）。
 > 高德 Key：到 https://lbs.amap.com/ 申请「Web端(JS API)」类型 Key 与安全密钥，写入数据库或 .env.local 均可；
 > 防盗刷请在高德后台配置**域名白名单**。
 

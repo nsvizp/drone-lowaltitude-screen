@@ -6,7 +6,7 @@ import { EventEmitter } from 'node:events'
 export class EventBus {
   readonly emitter = new EventEmitter()
 
-  emit(channel: 'feed' | 'node' | 'disaster', payload: unknown): void {
+  emit(channel: 'feed' | 'node' | 'disaster' | 'warehouses', payload: unknown): void {
     this.emitter.emit(channel, payload)
   }
 

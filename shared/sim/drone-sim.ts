@@ -528,10 +528,19 @@ export function recallMissionDrones(state: FleetState): FleetState {
 
 let deliverySeq = 0
 
+/** 方舱临时起飞参数，供前后端共享模拟器调用。 */
+export interface LaunchOptions {
+  name?: string
+  home: LngLat
+  waypoints: LngLat[]
+  taskName: string
+  mission?: Mission
+}
+
 /** 从方舱起飞一架投送机，沿 waypoints（物资点 → 灾点 → 回舱）飞行。纯函数。 */
 export function launchDrone(
   state: FleetState,
-  opts: { name?: string; home: LngLat; waypoints: LngLat[]; taskName: string; mission?: Mission },
+  opts: LaunchOptions,
 ): FleetState {
   deliverySeq += 1
   const telemetryAt = Date.now()

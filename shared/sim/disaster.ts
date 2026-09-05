@@ -41,6 +41,8 @@ export interface FlyerInfo {
   name: string
   /** 最近任务时间 yyyy-MM-dd HH:mm，越早说明休整越充分 */
   lastMission: string
+  /** 缺省视为可调度，兼容既有台账数据。 */
+  status?: 'available' | 'offline'
 }
 
 /** @deprecated 兼容引用：等价于 DISASTER_SUPPLY_KEYWORDS.flood */
@@ -56,6 +58,13 @@ export const DELIVERY_TEAM_SIZE = 2
 export const DELIVERY_SPEED = 12
 /** 装卸货时间（分钟） */
 export const HANDLING_MINUTES = 5
+
+/** 巡逻机即使处于正常返程航段，电量达标时仍可被应急改派。 */
+export function isSurveyDroneDispatchable(drone: DroneState): boolean {
+  return drone.mission === 'patrol'
+    && (drone.status === 'flying' || drone.status === 'returning')
+    && drone.batteryPct >= SURVEY_MIN_BATTERY
+}
 
 export interface SurveyAssignment {
   droneId: string
@@ -153,7 +162,10 @@ export function pickShelters(shelters: ShelterInfo[], flood: FloodEvent, n: numb
 
 /** 挑选休整最充分的 n 名飞手（最近任务时间最早优先），不重复 */
 export function pickRestedFlyers(flyers: FlyerInfo[], n: number): FlyerInfo[] {
-  return [...flyers].sort((a, b) => a.lastMission.localeCompare(b.lastMission)).slice(0, n)
+  return flyers
+    .filter((flyer) => flyer.status !== 'offline')
+    .sort((a, b) => a.lastMission.localeCompare(b.lastMission))
+    .slice(0, n)
 }
 
 /**
@@ -172,7 +184,7 @@ export function planFloodDispatch(
 
   // --- 勘测组 ---
   const candidates = fleet.drones
-    .filter((d: DroneState) => d.status === 'flying' && d.mission === 'patrol' && d.batteryPct >= SURVEY_MIN_BATTERY)
+    .filter(isSurveyDroneDispatchable)
     .map((d) => ({ d, dist: distanceMeters([d.lng, d.lat], flood.position) }))
     .sort((a, b) => a.dist - b.dist)
   const survey: SurveyAssignment[] = candidates.slice(0, SURVEY_TEAM_SIZE).map(({ d, dist }) => ({
@@ -180,7 +192,7 @@ export function planFloodDispatch(
     droneName: d.name,
     flyerNote: '原飞手保持操控',
     distanceKm: Math.round((dist / 1000) * 100) / 100,
-    battery: d.batteryPct,
+    battery: Math.round(d.batteryPct * 10) / 10,
     etaSec: Math.round(dist / EMERGENCY_SPEED), // 改派后提速至应急速度，ETA 按实际口径
   }))
   if (survey.length < SURVEY_TEAM_SIZE) {

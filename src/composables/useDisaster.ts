@@ -3,6 +3,7 @@ import { authFetch } from '@/api/http'
 import { getSocket } from '@/api/socket'
 import type { DispatchPlan, FloodEvent } from '@/sim/disaster'
 import type { ReinforcementEval, SituationState, SituationSummary } from '@/sim/situation'
+import type { AiDecisionResult, AiDecisionStatus } from '@/sim/ai-decision'
 
 /** 方舱（含备用机编制）与飞手名册（展示用常量；权威数据在后端 ledger 表） */
 export const SHELTERS = [
@@ -21,19 +22,27 @@ export const FLYERS = [
 interface DisasterSnapshot {
   flood: FloodEvent | null
   plan: DispatchPlan | null
+  pendingPlan: DispatchPlan | null
   situation: SituationState | null
   summary: SituationSummary | null
   eval: ReinforcementEval | null
   reinforced: boolean
+  aiStatus: AiDecisionStatus
+  aiDecision: AiDecisionResult | null
 }
 
 // ---------- 模块级灾情状态（镜像服务端权威状态） ----------
 const flood = ref<FloodEvent | null>(null)
 const plan = ref<DispatchPlan | null>(null)
+const pendingPlan = ref<DispatchPlan | null>(null)
 const situation = ref<SituationState | null>(null)
 const summaryRef = ref<SituationSummary | null>(null)
 const evalResult = ref<ReinforcementEval | null>(null)
 const reinforced = ref(false)
+const aiStatus = ref<AiDecisionStatus>('idle')
+const aiDecision = ref<AiDecisionResult | null>(null)
+// 仅控制新触发的灾情是否跳过模型调用，便于稳定演示规则算法兜底。
+const forceRuleFallback = ref(false)
 const videoDroneId = ref<string | null>(null)
 
 let connected = false
@@ -41,10 +50,13 @@ let connected = false
 function applySnapshot(s: DisasterSnapshot): void {
   flood.value = s.flood
   plan.value = s.plan
+  pendingPlan.value = s.pendingPlan
   situation.value = s.situation
   summaryRef.value = s.summary
   evalResult.value = s.eval
   reinforced.value = s.reinforced
+  aiStatus.value = s.aiStatus ?? 'idle'
+  aiDecision.value = s.aiDecision ?? null
 }
 
 function connect(): void {
@@ -61,13 +73,29 @@ function connect(): void {
 export function useDisaster() {
   connect()
 
-  /** 模拟灾情（服务端生成灾点并执行调配）：flood 洪灾 / debris 泥石流 */
+  /** 模拟灾情感知（服务端仅生成灾点与调配草稿，等待指挥确认）：
+   *  flood 洪灾 / debris 泥石流 */
   const simulateFlood = (type: 'flood' | 'debris' | 'fire' = 'flood') => {
     void authFetch('/api/disaster/simulate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type }),
-    }).catch(() => undefined)
+      body: JSON.stringify({ type, forceRuleFallback: forceRuleFallback.value }),
+    })
+      .then((response) => response.ok ? response.json() : null)
+      .then((snapshot) => { if (snapshot) applySnapshot(snapshot) })
+      .catch(() => undefined)
+  }
+
+  /** 指挥确认调配：下达抢险调配单，初始化现场态势实时动态 */
+  const executeDispatch = async (): Promise<DisasterSnapshot | null> => {
+    try {
+      const response = await authFetch('/api/disaster/execute', { method: 'POST' })
+      const snapshot = response.ok ? await response.json() as DisasterSnapshot : null
+      if (snapshot) applySnapshot(snapshot)
+      return snapshot
+    } catch {
+      return null
+    }
   }
 
   /** 执行二次调配增援 */
@@ -84,12 +112,15 @@ export function useDisaster() {
   const closeVideo = () => { videoDroneId.value = null }
 
   // 调试/验收钩子（Playwright 探针）
-  ;(window as unknown as Record<string, unknown>).__DISASTER = { flood, plan, situation, summaryRef, evalResult, openVideo, closeVideo }
+  ;(window as unknown as Record<string, unknown>).__DISASTER = {
+    flood, plan, situation, summaryRef, evalResult, forceRuleFallback, openVideo, closeVideo,
+  }
 
   const active = computed(() => flood.value !== null)
 
   return {
-    flood, plan, situation, summary: summaryRef, evalResult, reinforced, active, videoDroneId,
-    simulateFlood, executeReinforcement, resolveDisaster, openVideo, closeVideo,
+    flood, plan, pendingPlan, situation, summary: summaryRef, evalResult, reinforced, aiStatus, aiDecision,
+    forceRuleFallback, active, videoDroneId,
+    simulateFlood, executeDispatch, executeReinforcement, resolveDisaster, openVideo, closeVideo,
   }
 }

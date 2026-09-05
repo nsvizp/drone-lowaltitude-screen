@@ -3,6 +3,7 @@ import { advanceFleet, createFleet, createShanghaiRoutes, mulberry32 } from './d
 import { createEmergencyData, routesBBox } from './emergency-data'
 import {
   createFloodEvent,
+  isSurveyDroneDispatchable,
   pickRestedFlyers,
   pickShelters,
   pickSupplySite,
@@ -64,6 +65,27 @@ describe('pickRestedFlyers（休整充分优先）', () => {
     const picked = pickRestedFlyers(FLYERS, 2)
     expect(picked.map((f) => f.name)).toEqual(['赵六', '王五']) // 5-12 的两位
     expect(new Set(picked.map((f) => f.id)).size).toBe(2)
+  })
+
+  it('离线飞手不进入候选调度', () => {
+    const picked = pickRestedFlyers([
+      { id: 1, name: '离线飞手', lastMission: '2025-01-01 00:00', status: 'offline' },
+      { id: 2, name: '在线飞手', lastMission: '2026-01-01 00:00', status: 'available' },
+    ], 2)
+    expect(picked.map((flyer) => flyer.name)).toEqual(['在线飞手'])
+  })
+})
+
+describe('isSurveyDroneDispatchable（应急改派资格）', () => {
+  const drone = createFleet(routes, 1, mulberry32(9)).drones[0]
+
+  it('正常返程且电量达标的巡逻机仍可改派', () => {
+    expect(isSurveyDroneDispatchable({ ...drone, status: 'returning', mission: 'patrol', batteryPct: 80 })).toBe(true)
+  })
+
+  it('低电量或非巡逻任务不可改派', () => {
+    expect(isSurveyDroneDispatchable({ ...drone, status: 'returning', mission: 'patrol', batteryPct: 20 })).toBe(false)
+    expect(isSurveyDroneDispatchable({ ...drone, status: 'flying', mission: 'survey', batteryPct: 80 })).toBe(false)
   })
 })
 
