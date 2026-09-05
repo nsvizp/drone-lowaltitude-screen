@@ -152,8 +152,11 @@ export class DisasterService implements OnModuleInit {
       warehouses: supplies.map((s) => ({ id: s.id, name: s.name })),
       shelters: SHELTERS.map((s) => ({ id: s.id, name: s.name })),
     }
+    // 本地大模型（27B Q5 思维链推理约 15~30s），超时 60s 兜底；AI 卡推演动画覆盖该等待
     const client = this.llmClient ?? makeOpenAiClient(floodEvent, llmCtx)
-    const llmPlan = client ? await analyzeWithLlm({ client, timeoutMs: 8000 }, floodEvent, llmCtx) : null
+    const t0 = Date.now()
+    const llmPlan = client ? await analyzeWithLlm({ client, timeoutMs: 60000 }, floodEvent, llmCtx) : null
+    console.log('[llm] ' + (llmPlan ? 'ai 选案成功' : '回退算法') + ' 耗时 ' + ((Date.now() - t0) / 1000).toFixed(1) + 's', llmPlan ? '' : '(client=' + !!client + ')')
 
     const fleetSnapshot: FleetState = { drones: currentDrones, tickCount: 0 }
     const dispatchPlan = planFloodDispatch(fleetSnapshot, SHELTERS, FLYERS, supplies, floodEvent,

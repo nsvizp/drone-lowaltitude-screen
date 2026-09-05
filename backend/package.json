@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "node --watch --require ts-node/register/transpile-only src/main.ts",
+    "dev": "node --watch --env-file=.env --require ts-node/register/transpile-only src/main.ts",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
     "test": "vitest run",

@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 # 后端（nohup 脱离会话，日志 backend/dev-server.log）
 if ! curl -s -o /dev/null --max-time 3 http://127.0.0.1:3000/api/config/public; then
   echo "[start] backend :3000"
-  (cd backend && nohup node --require ts-node/register/transpile-only src/main.ts > dev-server.log 2>&1 &)
+  (cd backend && nohup node --env-file=.env --require ts-node/register/transpile-only src/main.ts > dev-server.log 2>&1 &)
 else
   echo "[skip] backend already running"
 fi
