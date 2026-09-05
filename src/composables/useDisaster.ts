@@ -1,6 +1,7 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { authFetch } from '@/api/http'
 import { getSocket } from '@/api/socket'
+import { nearestDistrict } from '@/sim/place-name'
 import type { DispatchPlan, FloodEvent } from '@/sim/disaster'
 import type { ReinforcementEval, SituationState, SituationSummary } from '@/sim/situation'
 import type { AiDecisionResult, AiDecisionStatus } from '@/sim/ai-decision'
@@ -29,6 +30,8 @@ interface DisasterSnapshot {
   reinforced: boolean
   aiStatus: AiDecisionStatus
   aiDecision: AiDecisionResult | null
+  planSource: 'ai' | 'algorithm' | null
+  aiReasoning: string | null
 }
 
 // ---------- 模块级灾情状态（镜像服务端权威状态） ----------
@@ -41,9 +44,63 @@ const evalResult = ref<ReinforcementEval | null>(null)
 const reinforced = ref(false)
 const aiStatus = ref<AiDecisionStatus>('idle')
 const aiDecision = ref<AiDecisionResult | null>(null)
+const planSource = ref<'ai' | 'algorithm' | null>(null)
+const aiReasoning = ref<string | null>(null)
 // 仅控制新触发的灾情是否跳过模型调用，便于稳定演示规则算法兜底。
 const forceRuleFallback = ref(false)
+/** 灾点地名：优先高德逆地理，失败时回退到最近行政区。 */
+export const floodPlace = ref<string | null>(null)
 const videoDroneId = ref<string | null>(null)
+
+let geocoder: { getAddress: (loc: [number, number], cb: (status: string, result: { regeocode?: { formattedAddress?: string } }) => void) => void } | null = null
+
+/** 使用地图页面已经加载的高德 JS API 解析街道级地址。 */
+function jsApiGeocode(lng: number, lat: number): Promise<string | null> {
+  return new Promise((resolve) => {
+    const AMap = (window as unknown as Record<string, unknown>).AMap as {
+      plugin: (name: string, cb: () => void) => void
+      Geocoder: new () => NonNullable<typeof geocoder>
+    } | undefined
+    if (!AMap) { resolve(null); return }
+    try {
+      AMap.plugin('AMap.Geocoder', () => {
+        geocoder ??= new AMap.Geocoder()
+        geocoder.getAddress([lng, lat], (status, result) => {
+          const address = status === 'complete' ? result.regeocode?.formattedAddress : null
+          resolve(typeof address === 'string' && address ? address : null)
+        })
+      })
+    } catch {
+      resolve(null)
+    }
+    setTimeout(() => resolve(null), 6000)
+  })
+}
+
+/** 逆地理编码：JS API → REST API → 行政区兜底。 */
+async function reverseGeocode(lng: number, lat: number): Promise<void> {
+  floodPlace.value = nearestDistrict([lng, lat])
+  try {
+    const jsAddress = await jsApiGeocode(lng, lat)
+    if (jsAddress) { floodPlace.value = jsAddress.replace(/^上海市/, ''); return }
+    const response = await authFetch('/api/config/public')
+    if (!response.ok) return
+    const config = await response.json() as { 'amap.key'?: string }
+    if (!config['amap.key']) return
+    const query = new URLSearchParams({ location: lng + ',' + lat, key: config['amap.key'], extensions: 'base' })
+    const result = await fetch('https://restapi.amap.com/v3/geocode/regeo?' + query)
+    const data = await result.json() as { status?: string; regeocode?: { formattedAddress?: string } }
+    const restAddress = data.status === '1' ? data.regeocode?.formattedAddress : null
+    if (restAddress) floodPlace.value = restAddress.replace(/^上海市/, '')
+  } catch {
+    // 网络或密钥不可用时保留行政区兜底结果。
+  }
+}
+
+watch(flood, (current) => {
+  if (current) void reverseGeocode(current.position[0], current.position[1])
+  else floodPlace.value = null
+})
 
 let connected = false
 
@@ -57,6 +114,8 @@ function applySnapshot(s: DisasterSnapshot): void {
   reinforced.value = s.reinforced
   aiStatus.value = s.aiStatus ?? 'idle'
   aiDecision.value = s.aiDecision ?? null
+  planSource.value = s.planSource ?? (s.aiDecision?.source === 'model' ? 'ai' : s.aiDecision ? 'algorithm' : null)
+  aiReasoning.value = s.aiReasoning ?? null
 }
 
 function connect(): void {
@@ -113,14 +172,15 @@ export function useDisaster() {
 
   // 调试/验收钩子（Playwright 探针）
   ;(window as unknown as Record<string, unknown>).__DISASTER = {
-    flood, plan, situation, summaryRef, evalResult, forceRuleFallback, openVideo, closeVideo,
+    flood, plan, pendingPlan, situation, summaryRef, evalResult, planSource, aiReasoning,
+    floodPlace, forceRuleFallback, openVideo, closeVideo,
   }
 
   const active = computed(() => flood.value !== null)
 
   return {
     flood, plan, pendingPlan, situation, summary: summaryRef, evalResult, reinforced, aiStatus, aiDecision,
-    forceRuleFallback, active, videoDroneId,
+    planSource, aiReasoning, floodPlace, forceRuleFallback, active, videoDroneId,
     simulateFlood, executeDispatch, executeReinforcement, resolveDisaster, openVideo, closeVideo,
   }
 }

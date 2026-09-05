@@ -54,6 +54,8 @@ pnpm build       # vue-tsc 类型检查 + 生产构建
 | --- | --- |
 | [docs/architecture.md](docs/architecture.md) | 项目架构：总体结构/数据流/接口清单/数据库表/目录 |
 | [docs/technical.md](docs/technical.md) | 技术文档：clone 后启动流程/脚本/配置/测试/部署/踩坑/演示手册 |
+| [docs/features-tech.md](docs/features-tech.md) | 功能技术清单：每个功能用了什么技术（8 大类全量对照） |
+| [docs/demo-script.md](docs/demo-script.md) | 演示视频录制脚本（12 分镜 · 操作/解说词/预期画面/清场） |
 | [docs/bom.md](docs/bom.md) | 前后端物料清单（依赖表 + 运行时要求） |
 | [docs/design.md](docs/design.md) | 视觉设计稿说明 |
 | [docs/backend-plan.md](docs/backend-plan.md) | 后端建设方案与决策记录 |

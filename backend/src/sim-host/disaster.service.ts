@@ -29,6 +29,7 @@ import {
 } from '../../../shared/sim/situation'
 import { distanceMeters, EMERGENCY_SPEED, mulberry32, type FleetState } from '../../../shared/sim/drone-sim'
 import { createEmergencyData } from '../../../shared/sim/emergency-data'
+import { latchReinforceEval } from '../../../shared/sim/eval-latch'
 import { PrismaService } from '../prisma.service'
 import { EventBus } from './event-bus'
 import { EventLogService } from './event-log.service'
@@ -65,6 +66,9 @@ export interface DisasterSnapshot {
   reinforced: boolean
   aiStatus: AiDecisionStatus
   aiDecision: AiDecisionResult | null
+  /** 兼容大屏展示：ai 表示模型生成说明，algorithm 表示规则兜底。 */
+  planSource: 'ai' | 'algorithm' | null
+  aiReasoning: string | null
 }
 
 /** 权威灾情编排：灾点生成 → 调配 → 现场态势 → 空投登记 → 增援评估 */
@@ -108,6 +112,8 @@ export class DisasterService implements OnModuleInit {
       reinforced: this.reinforced,
       aiStatus: this.aiStatus,
       aiDecision: this.aiDecision,
+      planSource: this.aiDecision?.source === 'model' ? 'ai' : this.aiDecision ? 'algorithm' : null,
+      aiReasoning: this.aiDecision?.source === 'model' ? this.aiDecision.recommendation : null,
     }
   }
 
@@ -147,8 +153,10 @@ export class DisasterService implements OnModuleInit {
     this.flood = floodEvent
     this.plan = null
     this.pendingPlan = dispatchPlan
-    this.situation = initSituation(floodEvent)
-    this.summary = summarizeSituation(this.situation, dispatchPlan.survey.length)
+    // 草稿阶段不启动现场态势；初始快照仅用于模型研判，确认下达后再正式计时。
+    const initialSituation = initSituation(floodEvent)
+    this.situation = null
+    this.summary = null
     this.evalResult = null
     this.reinforced = false
     this.aiStatus = 'analyzing'
@@ -177,7 +185,7 @@ export class DisasterService implements OnModuleInit {
     }, {})
     const context: EmergencyDecisionContext = {
       disaster: floodEvent,
-      situation: this.situation,
+      situation: initialSituation,
       candidatePlan: dispatchPlan,
       fleet: currentDrones.map(({ id, name, status, mission, batteryPct, lng, lat, routeName }) => ({
         id, name, status, mission, batteryPct, lng, lat, routeName,
@@ -249,6 +257,8 @@ export class DisasterService implements OnModuleInit {
 
     this.plan = nextPlan
     this.pendingPlan = null
+    this.situation = initSituation(this.flood)
+    this.summary = summarizeSituation(this.situation, nextPlan.survey.length)
     this.log.pushNode('初次调配下达', nextPlan.survey.length + ' 架勘测机改派 · ' + (nextPlan.delivery ? nextPlan.delivery.shelterName + ' ' + nextPlan.delivery.droneCount + ' 架投送 ' + nextPlan.delivery.droneCount * PACKS_PER_SORTIE + ' 件物资' : '无投送'), this.disasterId ?? undefined)
     this.log.pushFeed('disaster', '指挥确认调配，抢险勘测与物资投送启动')
     this.broadcastIfChanged()
@@ -334,18 +344,20 @@ export class DisasterService implements OnModuleInit {
     const surveyCount = fleet.drones.filter((d) => d.mission === 'survey' && d.status !== 'docked').length
     const nextSummary = summarizeSituation(this.situation, Math.max(surveyCount, 1))
     if (JSON.stringify(nextSummary) !== JSON.stringify(this.summary)) this.summary = nextSummary
-    const nextEval = evaluateReinforcement(nextSummary, fleet)
+    // 一旦达到增援阈值即锁定，避免后续遥测波动导致按钮闪烁消失。
+    const nextEval = latchReinforceEval(this.evalResult, evaluateReinforcement(nextSummary, fleet))
     if (JSON.stringify(nextEval) !== JSON.stringify(this.evalResult)) this.evalResult = nextEval
   }
 
   private async onTick(fleet: FleetState): Promise<void> {
-    if (!this.flood || !this.situation) return
+    if (!this.flood) return
     if (!this.plan) {
       // 模型分析期间机队仍在飞行，持续刷新确认框中的实时遥测。
       this.refreshPendingTelemetry(fleet)
       this.broadcastIfChanged()
       return
     }
+    if (!this.situation) return
 
     // 现场观测：有盘旋勘测机才产生事件流
     const surveyor = fleet.drones.find((d) => d.mission === 'survey' && d.status === 'hovering')

@@ -3,9 +3,20 @@ import { computed } from 'vue'
 import { useDisaster } from '@/composables/useDisaster'
 import { useDrones } from '@/composables/useDrones'
 import { liveEta, liveSurveyRows } from '@/sim/live-dispatch'
+import { aiReasoningPhase } from './ai-stage'
+import { draftConfirmState } from './ai-script'
+import { formatPlace } from '@/sim/place-name'
 
-const { flood, plan, evalResult, reinforced, executeReinforcement } = useDisaster()
+const { flood, plan, pendingPlan, planSource, evalResult, reinforced, floodPlace, executeDispatch, executeReinforcement } = useDisaster()
 const { drones } = useDrones()
+
+/** 灾点展示：具体地名附近（坐标） */
+const floodPlaceText = computed(() => (flood.value ? formatPlace(floodPlace.value, flood.value.position) : ''))
+
+/** 草稿确认入口：大模型选案→只在 AI 卡确认；算法兜底→推演完成后才可下达 */
+const confirmState = computed(() => draftConfirmState(planSource.value, aiReasoningPhase.value))
+
+const KIND_NAME: Record<string, string> = { flood: '洪灾', debris: '泥石流', fire: '火灾' }
 
 /** 勘测组实时行：电量/距离/ETA 随机队 WS 快照每秒刷新 */
 const liveRows = computed(() => (plan.value ? liveSurveyRows(plan.value, drones.value) : []))
@@ -30,13 +41,45 @@ function etaText(sec: number, arrived?: boolean): string {
 </script>
 
 <template>
-  <div v-if="plan && flood" class="dispatch-card">
+  <!-- 草稿态：灾情感知后、指挥确认前（算法兜底路径：AI 面板不可用时可在此直接确认） -->
+  <div v-if="flood && !plan && pendingPlan" class="dispatch-card dispatch-card--draft">
     <div class="dispatch-card__head">
-      <span class="dispatch-card__title">🚨 抢险调配单</span>
-      <span class="dispatch-card__severity" :data-sev="flood.severity">{{ 'ⅠⅡⅢ'[flood.severity - 1] }} 级洪灾</span>
+      <span class="dispatch-card__title">📋 抢险调配单（草稿 · 待确认）</span>
+      <span class="dispatch-card__severity" :data-sev="flood.severity">{{ 'ⅠⅡⅢ'[flood.severity - 1] }} 级{{ KIND_NAME[flood.kind ?? 'flood'] }}</span>
     </div>
     <div class="dispatch-card__coord">
-      灾点 {{ flood.position[0].toFixed(4) }}, {{ flood.position[1].toFixed(4) }}
+      灾点 {{ floodPlaceText }}
+    </div>
+    <div class="dispatch-card__group">
+      <div class="dispatch-card__group-title">勘测组（拟改派 {{ pendingPlan.survey.length }} 架）</div>
+      <div v-for="s in pendingPlan.survey" :key="s.droneId" class="dispatch-card__row">
+        <span class="dispatch-card__name">{{ s.droneName }}</span>
+        <span class="dispatch-card__dim">{{ s.distanceKm }}km · ETA {{ etaText(s.etaSec) }}</span>
+      </div>
+    </div>
+    <div v-if="pendingPlan.delivery" class="dispatch-card__group">
+      <div class="dispatch-card__group-title">投送组（拟 {{ pendingPlan.delivery.shelterName }} 起飞 {{ pendingPlan.delivery.droneCount }} 架）</div>
+      <div class="dispatch-card__dim">{{ pendingPlan.delivery.supplySiteName }} · 全程 {{ pendingPlan.delivery.totalKm }}km</div>
+    </div>
+    <button
+      v-if="confirmState === 'ready'"
+      class="dispatch-card__btn dispatch-card__btn--confirm"
+      @click="executeDispatch"
+    >
+      ✅ 确认下达调配（算法方案）
+    </button>
+    <div v-else-if="confirmState === 'locked'" class="dispatch-card__wait">🧠 大模型推演中，完成后方可下达…</div>
+    <div v-else class="dispatch-card__wait">🧠 大模型已生成方案，请在推演面板确认下达</div>
+  </div>
+
+  <!-- 执行态：确认下达后（实时遥测） -->
+  <div v-else-if="plan && flood" class="dispatch-card">
+    <div class="dispatch-card__head">
+      <span class="dispatch-card__title">🚨 抢险调配单</span>
+      <span class="dispatch-card__severity" :data-sev="flood.severity">{{ 'ⅠⅡⅢ'[flood.severity - 1] }} 级{{ KIND_NAME[flood.kind ?? 'flood'] }}</span>
+    </div>
+    <div class="dispatch-card__coord">
+      灾点 {{ floodPlaceText }}
     </div>
 
     <div class="dispatch-card__group">
@@ -168,6 +211,28 @@ function etaText(sec: number, arrived?: boolean): string {
   &__eval-title { font-size: 12px; font-weight: 600; color: #ffd666; }
   &__reasons { margin: 4px 0; padding: 0; list-style: none; color: var(--text-dim); font-size: 11px; }
   &__rec { font-size: 11px; color: var(--accent); margin-top: 3px; }
+
+  &--draft { border-color: rgba(255, 214, 102, 0.6); box-shadow: 0 0 20px rgba(255, 214, 102, 0.15); }
+
+  &__btn--confirm {
+    width: 100%;
+    margin-top: 10px;
+    background: rgba(255, 214, 102, 0.25);
+    border-color: rgba(255, 214, 102, 0.6);
+
+    &:hover:not(:disabled) { background: rgba(255, 214, 102, 0.4); }
+  }
+
+  &__wait {
+    margin-top: 10px;
+    padding: 6px 8px;
+    font-size: 11px;
+    text-align: center;
+    color: #b78cff;
+    background: rgba(183, 140, 255, 0.08);
+    border: 1px dashed rgba(183, 140, 255, 0.4);
+    border-radius: 4px;
+  }
 
   &__btn {
     margin-top: 6px;

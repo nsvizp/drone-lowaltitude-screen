@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useDisaster } from '@/composables/useDisaster'
 import { useDraggable } from '@/composables/useDraggable'
 import type { AiDecisionResult } from '@/sim/ai-decision'
+import { aiReasoningPhase } from './ai-stage'
 
 const rootRef = ref<HTMLElement | null>(null)
 const dragHandleRef = ref<HTMLElement | null>(null)
@@ -124,6 +125,7 @@ async function renderDecision(decision: AiDecisionResult): Promise<void> {
   renderedDecisionAt = decision.generatedAt
   clearTimers()
   playing.value = true
+  aiReasoningPhase.value = 'running'
   output.value = []
   thinking.value = decision.source === 'model'
     ? ['实时数据快照已完成', '规则候选方案已完成', decision.model + ' 结构化分析已完成']
@@ -138,6 +140,7 @@ async function renderDecision(decision: AiDecisionResult): Promise<void> {
   if (!playing.value) return
   phase.value = 'done'
   playing.value = false
+  aiReasoningPhase.value = 'done'
 }
 
 function stop(): void {
@@ -200,6 +203,7 @@ function start(): void {
   clearReinforceTimer()
   reinforceScheduled = false
   playing.value = true
+  aiReasoningPhase.value = 'running'
   renderedDecisionAt = ''
   thinking.value = initialThinking()
 }
@@ -215,6 +219,10 @@ watch([aiStatus, aiDecision], ([status, decision]) => {
     return
   }
   if (decision && (status === 'ready' || status === 'fallback')) void renderDecision(decision)
+})
+
+watch(disaster.flood, (current, previous) => {
+  if (!current && previous) aiReasoningPhase.value = 'idle'
 })
 
 /** 推演完成且调配草稿已下发 → 弹出确认调配弹框。
