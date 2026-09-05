@@ -214,12 +214,6 @@ function cancelDispatch(): void {
   confirmOpen.value = false
 }
 
-/** 手动触发物资调配确认框 */
-function openDispatchConfirm(): void {
-  if (!pendingPlan.value) return
-  confirmOpen.value = true
-}
-
 defineExpose({ start })
 
 onBeforeUnmount(() => { stop() })
@@ -245,17 +239,6 @@ onBeforeUnmount(() => { stop() })
     </div>
 
     <div v-show="!collapsed" class="ai-card__body">
-      <div class="ai-card__dispatch-bar">
-        <button
-          class="ai-card__dispatch-btn"
-          :disabled="!pendingPlan"
-          :title="pendingPlan ? '打开抢险调配确认框' : '暂无调配方案'"
-          @click="openDispatchConfirm"
-        >
-          📦 物资调配
-        </button>
-      </div>
-
       <div class="ai-card__think">
         <div class="ai-card__section-title" :class="{ 'ai-card__section-title--live': playing && phase === 'thinking' }">
           <span v-if="playing && phase === 'thinking'" class="ai-card__spinner" />
@@ -508,31 +491,6 @@ onBeforeUnmount(() => { stop() })
     padding: 16px 0;
   }
 
-  &__dispatch-bar {
-    display: flex;
-    margin-bottom: 10px;
-  }
-
-  &__dispatch-btn {
-    flex: 1;
-    padding: 8px 0;
-    border: none;
-    border-radius: 4px;
-    background: linear-gradient(90deg, rgba(0, 229, 255, 0.22), rgba(47, 128, 237, 0.16));
-    border: 1px solid rgba(0, 229, 255, 0.5);
-    color: #eaf3ff;
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 1px;
-    cursor: pointer;
-
-    &:hover:not(:disabled) {
-      background: linear-gradient(90deg, rgba(0, 229, 255, 0.32), rgba(47, 128, 237, 0.24));
-      box-shadow: 0 0 12px rgba(0, 229, 255, 0.25);
-    }
-
-    &:disabled { opacity: 0.45; cursor: default; }
-  }
 }
 
 // ---------- 确认调配弹框（Teleport 到 body，fixed 居中） ----------
