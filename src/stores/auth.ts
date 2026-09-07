@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
-
-const TOKEN_KEY = 'drone-screen-token'
+import { getToken, TOKEN_KEY } from '@/api/http'
+import { disconnectSocket, reconnectSocket } from '@/api/socket'
 
 interface LoginParams {
   username: string
@@ -16,8 +16,8 @@ export class LoginError extends Error {
 /** 调后端 /api/auth/login（bcrypt 校验 + 服务端失败锁定） */
 export const useAuthStore = defineStore('auth', {
   state: () => ({
-    token: localStorage.getItem(TOKEN_KEY) ?? '',
-    displayName: localStorage.getItem(TOKEN_KEY) ? 'Admin' : '',
+    token: getToken(),
+    displayName: getToken() ? 'Admin' : '',
   }),
   getters: {
     isLoggedIn: (s) => s.token !== '',
@@ -39,11 +39,13 @@ export const useAuthStore = defineStore('auth', {
       this.token = body.token
       this.displayName = body.displayName
       localStorage.setItem(TOKEN_KEY, this.token)
+      reconnectSocket()
     },
     logout() {
       this.token = ''
       this.displayName = ''
       localStorage.removeItem(TOKEN_KEY)
+      disconnectSocket()
     },
   },
 })

@@ -17,3 +17,17 @@ export function getSocket(): Socket {
   }
   return socket
 }
+
+/** 登录成功后给已创建的 Socket 换用新令牌并立即重连。 */
+export function reconnectSocket(): void {
+  if (!socket) return
+  socket.auth = { token: getToken() }
+  if (socket.connected) socket.disconnect()
+  socket.connect()
+}
+
+/** 退出登录时主动关闭连接并同步在线状态。 */
+export function disconnectSocket(): void {
+  backendOnline.value = false
+  socket?.disconnect()
+}
